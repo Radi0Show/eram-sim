@@ -1,0 +1,19 @@
+# Original game data and dumps must NEVER land in this repo.
+*.ios
+*.win
+*.gml
+*_research/
+gml_dump/
+
+# Art is extracted per-machine from the player's own copy; only the curated
+# pack under assets/sprites ships (the carve-out below).
+*.png
+!assets/sprites/*.png
+
+# Audio ships per the project's permission posture; raw extraction scratch
+# does not.
+/tmp/
+*.log
+
+node_modules/
+.DS_Store
