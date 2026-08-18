@@ -102,20 +102,97 @@ same 32px grid rather than a step-for-step reproduction of GameMaker's
 `mp_grid_path`, so a chasing enemy takes a route of the same shape, not the
 identical one.
 
+## [x] Contact damage, and the switch that governs it
+
+**Contact does not hurt you in level 1, and it never will.** This is the
+finding that shapes everything else here. `scr_board_enemy_init` gives every
+enemy
+
+```gml
+aggressive = obj_board_controller.violence;
+active_hitbox = aggressive;
+```
+
+and the player's damage block will not fire unless
+`hazard.active_hitbox == true`. `obj_board_controller`'s Create reads
+
+```gml
+violence = true;
+if (room == room_board_1_sword) violence = false;
+```
+
+Grepping the whole chapter, only two things ever write `violence`: that
+Create, and `obj_b2s_swordmanager` (level 2), which forces it false while
+`scon == 0` and turns it true the moment `kris.sword` is true — and again
+once `kris.xp > 0`. **Level 1's own manager, `obj_board_1_sword_manager`,
+never touches it.** So the damage system belongs to level 2 and arrives with
+the sword. Level 3 has violence on by Create default and no spawners at all,
+so it is moot there.
+
+(The `_docile` in `spr_board_monster_outline_docile` is a red herring — the
+monster's Create picks that art for `room_board_1_sword || room_board_2_sword`
+both, so it is the sword route's outlined style, not a behaviour.)
+
+**The hazard you actually touch is not the enemy.** `scr_board_enemy_init`
+creates `damage_hitbox = obj_board_enemy_contact_hitbox` at `(x+16, y+16)`
+and re-pins it there every step; the hitbox carries `damage = 2`, while the
+enemy's own `damage` is 1 and never lands. Two damage against `maxhealth 12`
+is six hits, which the shadowmantle branch spells out as
+`numberofhitskriscantake = 6`.
+
+The numbers, all from `obj_mainchara_board`:
+
+| | |
+|---|---|
+| `myhealth` at Create | 999, clamped to `maxhealth` by the Step's first health line — that clamp *is* the initialisation |
+| `maxhealth` | 12 |
+| `iframes` | 20 on a hit; `if (iframes > -5) iframes--` each step |
+| `hurttimer` | 5 — `canfreemove` returns at 1 |
+| `hitmove` / `hitmovespeed` | **32 / 16 on the hit**, so knockback is exactly two frames of 16. Create's `hitmove = 64` is overwritten before it is ever used |
+| direction | `point_direction(x, y, hazard.xprevious, hazard.yprevious)` — away from where the hazard *was*, with a per-quadrant fallback that slides along a wall |
+| the flash | not a blink: the Draw flips `image_blend` white↔red every second frame while iframes run |
+| the recoil clamp | while `hurttimer > 0`, x/y are clamped to 128..480 / 64..288, so a knockback can never shove Kris over an edge and trip the camera |
+
+**There is no hurt sprite on the board.** `hurtsprite` is assigned in the
+Step but `sprite_index` is never set from it — only `scr_defeatrun` and the
+death event use it. Kris keeps his walking frame and flashes.
+
+Being hit also stuns the enemy: `delay = 10` (30 for `type == 2`), and every
+movement branch in the monster's Step is gated on `delay == 0`. The game
+stuns `instance_nearest(x + 16, y + 16, obj_board_enemy_monster)` — the
+monster nearest Kris, not necessarily the one that hit him. Kept as written.
+
+**Death** in a sword room is `global.flag[1007] = 1` and
+`obj_board_death_event_sword`, whose Step is `exit` — the whole sequence is
+in its Draw, on a frame counter: flood the 640x480 window with `red`, draw
+Kris over it as a black silhouette, `facing--` every 4 frames for 48 frames
+(three full turns), and step the flood down at 40, 50 and 60 before the TV
+turns off at 90 and `room_goto(room_board_sword_intro)` at 120. The `red`
+values are GameMaker BGR literals: 6609, 7079, 5241, 0 decode to rgb(209,25,0),
+rgb(167,27,0), rgb(121,20,0), black — verified against the running canvas.
+
+**Approximations, labelled on the page:** death restarts the level instead of
+returning to `room_board_sword_intro` (a room this sim does not have), and
+the health bar's frame sprite is a stand-in outline — its *fill* is exact,
+being `spr_whitepx` stretched to `round(healthamt * 50) x 6` at (+14,+12) in
+`#DBFC8F`, which is a rectangle and needs no art. In a sword room
+`obj_ch3_gameshow` makes exactly one bar, for Kris, at (270,34); the
+three-bar party layout at (128/222/316, 32) is the non-sword one.
+
 ## [ ] Still to do — in order
 
-1. **Contact damage.** `myhealth`, the iframes block, `hitmove = 64`
-   knockback and the hurt sprite — `obj_mainchara_board`'s Step already has
-   the whole hazard path read but not translated.
-2. **The sword.** `obj_mainchara_board`'s Create carries `sword`, `swordlv`,
+1. **The sword.** `obj_mainchara_board`'s Create carries `sword`, `swordlv`,
    `xp`, `xptolevel` — and level 2 sets `xptolevel = 10`, the dungeons 4 and
-   68. The attack itself is `swordbuffer` / `swordhitbox` in its Step.
+   68. The attack itself is `swordbuffer` / `swordhitbox` in its Step. This
+   is also what turns `violence` on, so it is what makes the damage above
+   reachable without the page's debug switch.
+2. **The other four enemy behaviours.** Flower, bluefish, lizard and
+   bluebird spawn and draw but hold station.
 3. **Decoration that moves.** Tree spawners, waterfalls, `screenColorChanger`
    (118 in level 2 — it tints per screen).
 4. **Warps.** `obj_board_warpentrance` / `obj_board_warptouch`, and the
    camera's `shift = "warp"` branch.
-5. **Hazards and damage.** `obj_board_hazard`, `myhealth`, the iframes block.
-6. **The rank.** What actually scores a board.
+5. **The rank.** What actually scores a board.
 
 ## Deliberately out of scope
 

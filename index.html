@@ -32,6 +32,8 @@
   }
   #levels button.on { color:#ffff00; }
   #levels button:hover, #levels button:focus-visible { color:#fff; outline:none; }
+  #levels .sep { color:#1c1c1c; }
+  #levels button.violence.on { color:#ff4a3a; }
   #note {
     position:fixed; bottom:40px; left:0; right:0; z-index:5;
     text-align:center; font-size:10px; color:#4a3a1a; letter-spacing:.08em;
@@ -62,7 +64,7 @@
 <div id="keys">&#9664; &#9654; &#9650; &#9660; / WASD &middot; WALK TO THE EDGE AND THE SCREEN MOVES</div>
 <!-- PLAYBOOK RULE 4: anything unrepresentative is labelled where the player
      sees it, not only in the docs. -->
-<div id="note">ENEMIES SPAWN, WANDER AND CHASE &middot; CONTACT DOES NOT HURT YET &middot; NO SWORD</div>
+<div id="note">CONTACT COSTS 2 OF 12 &middot; VIOLENCE IS THE GAME&rsquo;S OWN SWITCH: OFF UNTIL THE SWORD, AND NEVER ON IN LEVEL 1 &middot; THE HEALTH BAR&rsquo;S FRAME IS A STAND-IN, ITS FILL IS EXACT &middot; DEATH RESTARTS THE LEVEL INSTEAD OF RETURNING TO THE INTRO ROOM</div>
 
 <footer>
   A FAN PROJECT &middot; UNAFFILIATED WITH TOBY FOX &middot; DELTARUNE &copy; TOBY FOX &middot;
@@ -88,13 +90,23 @@
   const label = document.getElementById('label');
   let running = null;
 
+  // THE VIOLENCE SWITCH is obj_board_controller's own flag, not an invented
+  // difficulty setting: enemies get `active_hitbox = violence`, and the
+  // player's damage block refuses a hazard whose hitbox is not active. The
+  // game turns it on when Kris draws the sword — which is the next thing to
+  // build — so until then this is the only way to reach the damage code.
+  let violence = false;
+  let current = null;
+  const levelButtons = [];
+
   async function play(entry, btn) {
     if (running) running.stop();
-    [...bar.children].forEach((b) => b.classList.toggle('on', b === btn));
+    current = entry;
+    levelButtons.forEach((b) => b.classList.toggle('on', b === btn));
     label.textContent = `ERAM · ${entry.title}`;
     try {
       const level = await fetch(`assets/levels/${entry.file}`).then((r) => r.json());
-      running = await runBoard(canvas, level, { base: 'assets/' });
+      running = await runBoard(canvas, level, { base: 'assets/', violence });
     } catch (err) {
       console.error('level failed to load:', err);
       document.getElementById('failed').style.display = 'flex';
@@ -107,9 +119,28 @@
     b.textContent = `LEVEL ${entry.number}`;
     b.addEventListener('click', () => play(entry, b));
     bar.append(b);
+    levelButtons.push(b);
   });
 
-  if (index.length) play(index[0], bar.firstChild);
+  const sep = document.createElement('span');
+  sep.className = 'sep';
+  sep.textContent = '·';
+  bar.append(sep);
+
+  const vb = document.createElement('button');
+  vb.type = 'button';
+  vb.className = 'violence';
+  vb.title = "obj_board_controller.violence — the game sets it when Kris draws the sword";
+  const paint = () => { vb.textContent = `VIOLENCE ${violence ? 'ON' : 'OFF'}`; vb.classList.toggle('on', violence); };
+  vb.addEventListener('click', () => {
+    violence = !violence;
+    paint();
+    if (running) running.violence = violence;
+  });
+  paint();
+  bar.append(vb);
+
+  if (index.length) play(index[0], levelButtons[0]);
 </script>
 </body>
 </html>

@@ -20,11 +20,30 @@
 // so a screen populates itself the moment it becomes the screen you are on,
 // and the bounds it tests are the PLAYER's bounds, not the pane's.
 //
+// WHETHER THEY CAN HURT YOU AT ALL is a separate switch, and it is the
+// thing to know before reading the damage code. `scr_board_enemy_init` sets
+//
+//     aggressive = obj_board_controller.violence
+//     active_hitbox = aggressive
+//
+// and the player's damage block refuses to fire unless
+// `hazard.active_hitbox == true`. obj_board_controller's Create says
+//
+//     violence = true;
+//     if (room == room_board_1_sword) violence = false;
+//
+// so LEVEL 1 IS HARMLESS. Nothing in level 1 ever turns it back on: the only
+// writers of `violence` in the whole chapter are that Create and
+// obj_b2s_swordmanager (level 2), which forces it false while `scon == 0`
+// and flips it true the moment `kris.sword` is true — and again on
+// `kris.xp > 0`. Level 1's own manager never touches it. So contact damage
+// is level 2's, and it arrives with the sword.
+//
 // Constants are from `scr_board_enemy_init` and the monster's own Create:
 //
-//   hp 1 · damage 1 · xp_given 1 · spd 3 (2 in level 1 at swordlv 1)
+//   hp 1 · xp_given 1 · spd 3 (2 in level 1 at swordlv 1)
+//   the contact hitbox carries damage 2 — not the enemy's own `damage = 1`
 //   distance_to_become_aggressive 90
-//   the contact hitbox sits at (x + 16, y + 16)
 //   every enemy is drawn at scale 2 (scr_darksize)
 //
 // APPROXIMATION, LABELLED: the chase is A* over the same 32px grid the game
@@ -43,9 +62,15 @@ export const SPAWN_BOUNDS = { x1: 128, x2: 480, y1: 64, y2: 288 };
 
 const DIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]];   // movedir = choose(0,1,2,3)
 
+/** obj_board_enemy_contact_hitbox's Create. The enemy's own `damage` is 1
+ *  and is never what lands: the hazard you actually touch is this. */
+export const CONTACT_DAMAGE = 2;
+
 export function createEnemies(level, opts = {}) {
   const solids = opts.solids ?? [];
   const rng = opts.rng ?? Math.random;
+  // obj_board_controller Create, then obj_b2s_swordmanager for level 2.
+  let violence = opts.violence ?? false;
   // Level 1 at swordlv 1 slows the monster to 2 and its animation to 0.1;
   // above that it is 3 and 0.2 (monster Create).
   const monsterSpeed = level.number === 1 && (opts.swordlv ?? 1) === 1 ? 2 : 3;
@@ -70,7 +95,12 @@ export function createEnemies(level, opts = {}) {
       enemies.push({
         kind: sp.kind, variant: sp.variant,
         x: sp.x, y: sp.y,
-        hp: 1, damage: 1,
+        // The hitbox tracks its parent every step at (x+16, y+16) at scale
+        // 2, so it covers the enemy's own 32x32 box; these are last frame's
+        // coordinates, which is what the knockback direction is taken from.
+        px: sp.x, py: sp.y,
+        hp: 1, damage: CONTACT_DAMAGE,
+        delay: 0,
         spd: sp.kind === 'monster' ? monsterSpeed : 3,
         angry: false,
         imageIndex: 0,
@@ -90,6 +120,13 @@ export function createEnemies(level, opts = {}) {
 
   function step(kris) {
     for (const e of enemies) {
+      e.px = e.x; e.py = e.y;
+
+      // `if (delay > 0) delay--;` and every movement branch is gated on
+      // `delay == 0` — the monster's Step. This is the stun it takes for
+      // having hit you.
+      if (e.delay > 0) { e.delay -= 1; e.imageIndex += 0.1; continue; }
+
       // The contact hitbox is offset (+16,+16) from the enemy's own corner.
       const dx = (kris.x + 16) - (e.x + 16);
       const dy = (kris.y + 16) - (e.y + 16);
@@ -126,11 +163,35 @@ export function createEnemies(level, opts = {}) {
     }
   }
 
-  /** Does anything touch Kris? The hitbox is the enemy's own 32x32 box. */
+  /**
+   * `instance_place(x, y, obj_board_hazard)` — but a hazard whose
+   * `active_hitbox` is false is not a hazard at all, which is the whole of
+   * why level 1 cannot hurt you.
+   */
   function touching(kris) {
+    if (!violence) return null;
     return enemies.find((e) =>
       kris.x < e.x + ENEMY_SIZE && kris.x + ENEMY_SIZE > e.x
-      && kris.y < e.y + ENEMY_SIZE && kris.y + ENEMY_SIZE > e.y);
+      && kris.y < e.y + ENEMY_SIZE && kris.y + ENEMY_SIZE > e.y) ?? null;
+  }
+
+  /**
+   * The hit's recoil, from the player's Step:
+   *
+   *     with (instance_nearest(x + 16, y + 16, obj_board_enemy_monster))
+   *         { ... delay = 10; if (type == 2) delay = 30; }
+   *
+   * Note it stuns the monster NEAREST KRIS, which is not necessarily the one
+   * that touched him — that is the game's own wording, kept.
+   */
+  function stun(kris) {
+    let best = null, bestd = Infinity;
+    for (const e of enemies) {
+      if (e.kind !== 'monster') continue;
+      const d = Math.hypot((kris.x + 16) - (e.x + 16), (kris.y + 16) - (e.y + 16));
+      if (d < bestd) { bestd = d; best = e; }
+    }
+    if (best) { best.delay = best.variant === 2 ? 30 : 10; best.movetimer = 0; }
   }
 
   function draw(ctx, sprites) {
@@ -143,6 +204,19 @@ export function createEnemies(level, opts = {}) {
     }
   }
 
-  return { enemies, spawnVisible, translate, step, touching, draw,
+  /** Back to an empty board — the death event destroys every enemy, and a
+   *  restarted level re-fires the spawners from scratch. */
+  function reset() {
+    enemies.length = 0;
+    spawned.clear();
+  }
+
+  return { enemies, spawnVisible, translate, step, touching, stun, draw, reset,
+           get violence() { return violence; },
+           set violence(v) {
+             // active_hitbox is re-read from `aggressive` every time the
+             // controller's flag moves; enemies already standing pick it up.
+             violence = !!v;
+           },
            get count() { return enemies.length; } };
 }

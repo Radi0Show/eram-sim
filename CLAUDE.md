@@ -18,7 +18,15 @@ carrying its comments. `tools/build-levels.py` regenerates
 generated, never hand-edited. `tools/devserver.py` serves on port 8411, its
 own port on purpose.
 
-Next work is listed at the end of RECON.md, in order. Enemies first.
+`sim/enemies.js` is the roster and the damage-side of contact. **Before
+changing anything about damage, read RECON.md's "Contact damage" section:
+enemies only hurt you when `obj_board_controller.violence` is on, the game
+turns that on with the sword, and it is NEVER on in level 1 — so the host
+page carries a debug VIOLENCE switch purely to make the code reachable
+before the sword exists. Do not "fix" harmless level-1 enemies.**
+
+Next work is listed at the end of RECON.md, in order. The sword is next,
+and it is what makes the damage reachable for real.
 
 Session basics (same machine as knight-sim):
 
