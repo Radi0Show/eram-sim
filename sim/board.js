@@ -29,6 +29,8 @@
 // being brought here; the numbers are all read out of obj_mainchara_board
 // and obj_board_camera, never tuned.
 
+import { createEnemies } from './enemies.js';
+
 const VIEW_W = 640, VIEW_H = 480;      // the game window
 const PANE_X = 128, PANE_Y = 64;       // where the board's screen sits in it
 const PANE_W = 384, PANE_H = 256;      // obj_board_camera's gamescreenWidth/Height
@@ -76,6 +78,15 @@ export async function runBoard(canvas, level, opts = {}) {
     ...['down', 'right', 'up', 'left'].flatMap((d) =>
       [0, 1].map((f) => loadImage(`${base}kris_${d}_${f}.png`))),
   ]);
+  const monsterIdle = await Promise.all([0, 1].map((f) =>
+    loadImage(`${base}monster_outline_docile_${f}.png`).catch(() => null)));
+  const monsterAngry = await Promise.all([0, 1].map((f) =>
+    loadImage(`${base}monster_angery_outline_docile_${f}.png`).catch(() => null)));
+  const enemySprites = {
+    idle: monsterIdle.filter(Boolean),
+    angry: monsterAngry.filter(Boolean),
+  };
+
   const krisSprite = {
     down: [krisFrames[0], krisFrames[1]],
     right: [krisFrames[2], krisFrames[3]],
@@ -95,6 +106,12 @@ export async function runBoard(canvas, level, opts = {}) {
 
   const world = { x: moveX, y: moveY };   // the tile layer's origin
   const solids = room.solids.map((s) => ({ x: s.x + moveX, y: s.y + moveY, w: s.w, h: s.h }));
+
+  /* THE ENEMIES. Their spawners live in world space like everything else,
+     so they are translated with the room and then tested against the
+     player's bounds — which is what the camera does at con 98. */
+  const spawners = (room.spawners ?? []).map((sp) => ({ ...sp, x: sp.x + moveX, y: sp.y + moveY }));
+  const foes = createEnemies(room, { solids, swordlv: opts.swordlv ?? 1 });
 
   const kris = {
     x: room.kris.x + moveX,
@@ -137,10 +154,12 @@ export async function runBoard(canvas, level, opts = {}) {
   let shift = 'none';
   let moving = 0;
 
-  /** Translate EVERYTHING — the world origin, the walls, Kris. */
+  /** Translate EVERYTHING — the world origin, the walls, Kris, the enemies. */
   function translate(dx, dy) {
     world.x += dx; world.y += dy;
     for (const s of solids) { s.x += dx; s.y += dy; }
+    for (const sp of spawners) { sp.x += dx; sp.y += dy; }
+    foes.translate(dx, dy);
     kris.x += dx; kris.y += dy;
   }
 
@@ -176,6 +195,9 @@ export async function runBoard(canvas, level, opts = {}) {
       shift = 'none';
       moving = 0;
       kris.canfreemove = true;
+      // obj_board_camera con 98: every spawner standing on the new screen
+      // fires now, before control comes back.
+      foes.spawnVisible(spawners);
     }
   }
 
@@ -330,6 +352,8 @@ export async function runBoard(canvas, level, opts = {}) {
     ctx.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
     drawTiles();
 
+    foes.draw(ctx, enemySprites);
+
     const frames = krisSprite[FACE_NAME[kris.facing]];
     const frame = frames[Math.floor(kris.imageIndex) % frames.length];
     ctx.drawImage(frame, Math.round(kris.x), Math.round(kris.y), KRIS_SIZE, KRIS_SIZE);
@@ -354,10 +378,15 @@ export async function runBoard(canvas, level, opts = {}) {
       stepShift();
       stepKris();
       stepAnim();
+      foes.step(kris);
     }
     draw();
     raf = requestAnimationFrame(frame);
   }
+  // The screen you start on gets the same treatment the camera would give
+  // it on arrival.
+  foes.spawnVisible(spawners);
+
   raf = requestAnimationFrame(frame);
 
   // Exposed for debugging and automated checks, like the sim's window.__sim.
@@ -366,6 +395,7 @@ export async function runBoard(canvas, level, opts = {}) {
     get shift() { return shift; },
     get world() { return world; },
     solids,
+    get foes() { return foes; },
     press: (k, on = true) => { if (on) held.add(k); else held.delete(k); },
     stop() { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); },
   };

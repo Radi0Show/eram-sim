@@ -59,10 +59,54 @@ and verified in `sim/board.js`:
   oscillates forever.
 - the shift is refused if a solid sits one cell beyond the boundary
 
+## [x] The enemies, and when they appear
+
+`obj_board_enemy_spawner`'s **user event 0 is the whole roster** — a
+21-branch dispatch on its own `image_index`. Finding it turned "reverse a
+dozen bespoke enemies" into "read one switch". None of the sword-route
+spawners carries creation code, so every `type` is the PreCreate default 0
+and no `type == 1` variant (spear boss, Toriel deer, miniboss walls) is
+reachable in these levels.
+
+**Nothing spawns on a timer.** `obj_board_camera` at `con == 98` — the frame
+a shift lands, before control returns — runs:
+
+```gml
+with (obj_board_enemy_spawner)
+    if (x >= 128 && x <= 480 && y >= 64 && y <= 288) event_user(0);
+```
+
+A screen populates itself the moment it becomes the screen you are on, and
+the rect it tests is the PLAYER's bounds, not the pane's.
+
+What the three levels actually place:
+
+| level | spawners | roster |
+|---|---|---|
+| 1 | 43 | 30 monster, 9 flower, 3 bluefish, 1 bluebird |
+| 2 | 10 | 4 bluefish, 3 monster, 2 lizard, 1 flower |
+| 3 | 0 | — |
+
+Constants from `scr_board_enemy_init` and the monster's Create: hp 1,
+damage 1, xp_given 1, spd 3 — but **2 in level 1 while `swordlv == 1`** —
+`distance_to_become_aggressive = 90`, contact hitbox at (x+16, y+16), scale
+2, `global.cell_size = 32`.
+
+Implemented: spawning on the landed screen, wander (`movedir =
+choose(0,1,2,3)`), chase inside 90, the docile/angry sprite swap, contact
+detection. **LABELLED on the page:** contact does not damage yet, and only
+the monster chases — the other four kinds stand and are drawn.
+
+**Approximation, labelled in `sim/enemies.js`:** the chase is A* over the
+same 32px grid rather than a step-for-step reproduction of GameMaker's
+`mp_grid_path`, so a chasing enemy takes a route of the same shape, not the
+identical one.
+
 ## [ ] Still to do — in order
 
-1. **Enemies.** `obj_board_enemy_spawner` (43 in level 1, 10 in level 2) and
-   the enemy family. Read the spawner before the enemies.
+1. **Contact damage.** `myhealth`, the iframes block, `hitmove = 64`
+   knockback and the hurt sprite — `obj_mainchara_board`'s Step already has
+   the whole hazard path read but not translated.
 2. **The sword.** `obj_mainchara_board`'s Create carries `sword`, `swordlv`,
    `xp`, `xptolevel` — and level 2 sets `xptolevel = 10`, the dungeons 4 and
    68. The attack itself is `swordbuffer` / `swordhitbox` in its Step.

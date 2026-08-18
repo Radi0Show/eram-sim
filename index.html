@@ -32,6 +32,10 @@
   }
   #levels button.on { color:#ffff00; }
   #levels button:hover, #levels button:focus-visible { color:#fff; outline:none; }
+  #note {
+    position:fixed; bottom:40px; left:0; right:0; z-index:5;
+    text-align:center; font-size:10px; color:#4a3a1a; letter-spacing:.08em;
+  }
   #keys {
     position:fixed; bottom:24px; left:0; right:0; z-index:5;
     text-align:center; font-size:11px; color:#2e2e2e; letter-spacing:.08em;
@@ -56,6 +60,9 @@
         aria-label="A board level. Arrow keys or WASD walk Kris; the screen shifts a whole pane at a time."></canvas>
 
 <div id="keys">&#9664; &#9654; &#9650; &#9660; / WASD &middot; WALK TO THE EDGE AND THE SCREEN MOVES</div>
+<!-- PLAYBOOK RULE 4: anything unrepresentative is labelled where the player
+     sees it, not only in the docs. -->
+<div id="note">ENEMIES SPAWN, WANDER AND CHASE &middot; CONTACT DOES NOT HURT YET &middot; NO SWORD</div>
 
 <footer>
   A FAN PROJECT &middot; UNAFFILIATED WITH TOBY FOX &middot; DELTARUNE &copy; TOBY FOX &middot;
