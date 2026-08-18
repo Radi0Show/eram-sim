@@ -18,15 +18,27 @@ carrying its comments. `tools/build-levels.py` regenerates
 generated, never hand-edited. `tools/devserver.py` serves on port 8411, its
 own port on purpose.
 
-`sim/enemies.js` is the roster and the damage-side of contact. **Before
-changing anything about damage, read RECON.md's "Contact damage" section:
-enemies only hurt you when `obj_board_controller.violence` is on, the game
-turns that on with the sword, and it is NEVER on in level 1 — so the host
-page carries a debug VIOLENCE switch purely to make the code reachable
-before the sword exists. Do not "fix" harmless level-1 enemies.**
+`sim/enemies.js` is the roster, contact damage and the sword's victims.
+**Before changing anything about whether an enemy is dangerous, read
+RECON.md's "The sword" section.** Two flags decide it and they are not the
+same flag: `obj_board_controller.violence` (off in level 1, turned on in
+level 2 with the sword) sets an enemy's `aggressive` when it SPAWNS, but the
+monster's own Step then forces `aggressive = true` whenever `swordlv > 1`,
+in every room. `aggressive` gates the hitbox AND the chase. So level 1 opens
+peaceful and turns hostile after three kills — that is the design, not a
+bug. Do not "fix" docile enemies, and do not assume `violence` is the whole
+story.
 
-Next work is listed at the end of RECON.md, in order. The sword is next,
-and it is what makes the damage reachable for real.
+**LEVEL FILES ARE GENERATED.** `tools/build-levels.py` owns
+`assets/levels/*.json`, spawners and pickup included. Editing those JSONs by
+hand works right up until someone regenerates — which has already happened
+once here and silently dropped every spawner. Change the generator.
+
+**UndertaleModCli blocks on stdin when its output is redirected.** Run it
+with `< /dev/null` or it hangs forever at 0% CPU looking exactly like the
+"concurrent runs wedge" failure. Two 40-minute stalls came from this.
+
+Next work is listed at the end of RECON.md, in order.
 
 Session basics (same machine as knight-sim):
 

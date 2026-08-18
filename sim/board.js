@@ -63,6 +63,37 @@ const HURTTIMER = 5;              // frames of lockout after one
 const HITMOVE = 32;               // Create says 64; the hit overwrites it
 const HITMOVESPEED = 16;          // so knockback is exactly two frames of 16
 
+/* ---------------- the sword ----------------
+   obj_mainchara_board's Create and the swing block in its Step.
+
+   THE SWING IS EIGHT FRAMES. press_1 sets `swordbuffer = 8` and drops
+   `canfreemove`; the buffer counts down 7..0 and control returns at 0. The
+   hitbox is created at buffer 6 and RE-AIMED at buffer 4, and on frames
+   7/6/5/4/0 a direction press still redirects the swing — so you can turn
+   a swing after starting it, which is most of how the weapon feels.
+
+   THE HITBOX GEOMETRY is where the origins matter. The two sprites are
+   spr_board_swordhitbox_vert (11x25, origin 1,8) and _horiz (25x11, origin
+   8,1), drawn at scale ±2 — the negative flips the box across the origin,
+   which is how up and left reach backwards. Worked through, each swing
+   covers 50px from Kris's centre along its axis and 22px across, and the
+   down/up boxes sit a couple of pixels off-centre because the game offsets
+   them by +2 and +10. Those asymmetries are the game's, and are kept. */
+const SWORDBUFFER = 8;
+const SWORD_BOXES = {
+  // facing: [x, y, w, h] relative to Kris's top-left corner
+  0: [0, 16, 22, 50],     // down
+  1: [16, 12, 50, 22],    // right
+  2: [8, -34, 22, 50],    // up
+  3: [-34, 12, 50, 22],   // left
+};
+/** The strike sprites are bigger than Kris and hang off him by their
+ *  origins: down (16x32, o 0,0), up (16x32, o 0,16), left (32x16, o 16,0),
+ *  right (32x16, o 0,0) — all at scale 2. */
+const STRIKE_OFFSET = { 0: [0, 0], 1: [0, 0], 2: [0, -32], 3: [-32, 0] };
+/** image_index by swordbuffer, from the Step's ladder. */
+const STRIKE_FRAME = { 7: 0, 6: 0, 5: 1, 4: 1, 3: 1, 2: 2, 1: 0, 0: 0 };
+
 /* obj_board_healthbar: one bar for Kris in a sword room, at (270,34), and
    the fill is a stretched white pixel 50 wide and 6 tall at (+14,+12). */
 const HEALTHBAR_X = 270, HEALTHBAR_Y = 34;
@@ -139,13 +170,23 @@ export async function runBoard(canvas, level, opts = {}) {
     loadImage(`${base}monster_outline_docile_${f}.png`).catch(() => null)));
   const monsterAngry = await Promise.all([0, 1].map((f) =>
     loadImage(`${base}monster_angery_outline_docile_${f}.png`).catch(() => null)));
+  const monsterHurt = (await Promise.all([0, 1].map((f) =>
+    loadImage(`${base}monster_hurt_${f}.png`).catch(() => null)))).filter(Boolean);
   const enemySprites = {
     idle: monsterIdle.filter(Boolean),
     angry: monsterAngry.filter(Boolean),
+    hurt: monsterHurt,
   };
-  // The bar's frame, if it has been extracted; the fill is drawn either way.
+  // The bar's frame (spr_board_healthbar, 46x15, two frames — alive, dead).
   const healthbarFrame = (await Promise.all([0, 1].map((f) =>
     loadImage(`${base}healthbar_${f}.png`).catch(() => null)))).filter(Boolean);
+  // spr_board_kris_strike_*, three frames each.
+  const strikeSprite = {};
+  for (const d of ['down', 'right', 'up', 'left']) {
+    strikeSprite[d] = (await Promise.all([0, 1, 2].map((f) =>
+      loadImage(`${base}kris_strike_${d}_${f}.png`).catch(() => null)))).filter(Boolean);
+  }
+  const keySprite = await loadImage(`${base}key_0.png`).catch(() => null);
 
   const krisSprite = {
     down: [krisFrames[0], krisFrames[1]],
@@ -180,7 +221,11 @@ export async function runBoard(canvas, level, opts = {}) {
      the code below this line could ever run. */
   const levelViolence = room.number !== 1;
   let violence = opts.violence ?? (levelViolence && (opts.sword ?? false));
-  const foes = createEnemies(room, { solids, swordlv: opts.swordlv ?? 1, violence });
+  const foes = createEnemies(room, {
+    solids, violence,
+    swordlv: () => kris.swordlv,
+    onKill: () => { kris.xp += 1; },      // xp_given is 1 for all of these
+  });
 
   const kris = {
     x: room.kris.x + moveX,
@@ -190,6 +235,16 @@ export async function runBoard(canvas, level, opts = {}) {
     walkbuffer: 0,
     canfreemove: true,
     nowx: 0, nowy: 0,
+    // The sword, from Create. `sword` is false in all three sword rooms —
+    // it is only true at Create for the dungeons and the mantle rooms — so
+    // in these levels you walk to the pickup and take it.
+    sword: opts.sword ?? false,
+    swordlv: 1,
+    xp: 0,
+    xptolevel: room.number === 2 ? 10 : 3,   // level 2 sets 10; default 3
+    swordbuffer: 0,
+    swordfacing: 0,
+    swordhitbox: null,
     // The damage state, all of it from obj_mainchara_board's Create.
     myhealth: 999,          // clamped to maxhealth on the first step
     maxhealth: MAXHEALTH,
@@ -214,11 +269,15 @@ export async function runBoard(canvas, level, opts = {}) {
   const KEYMAP = {
     arrowup: 'u', arrowdown: 'd', arrowleft: 'l', arrowright: 'r',
     w: 'u', s: 'd', a: 'l', d: 'r',
+    // press_1 — the game's confirm button, and the swing.
+    z: '1', enter: '1', ' ': '1',
   };
+  let press1 = false;          // edge-triggered, like keyboard_check_pressed
   const onKey = (e) => {
     const k = KEYMAP[e.key.toLowerCase()];
     if (!k) return;
     e.preventDefault();
+    if (k === '1' && !held.has('1')) press1 = true;
     held.add(k);
   };
   const onKeyUp = (e) => {
@@ -238,6 +297,7 @@ export async function runBoard(canvas, level, opts = {}) {
     world.x += dx; world.y += dy;
     for (const s of solids) { s.x += dx; s.y += dy; }
     for (const sp of spawners) { sp.x += dx; sp.y += dy; }
+    if (pickup) { pickup.x += dx; pickup.y += dy; }
     foes.translate(dx, dy);
     kris.x += dx; kris.y += dy;
   }
@@ -488,6 +548,83 @@ export async function runBoard(canvas, level, opts = {}) {
     }
   }
 
+  /* ---------------- the swing ----------------
+     The Step's sword block, in order. */
+  function stepSword() {
+    // press_1 && sword && swordbuffer <= 0 && canfreemove && camera idle
+    if (press1 && kris.sword && kris.swordbuffer <= 0 && kris.canfreemove
+        && shift === 'none' && !death) {
+      kris.swordbuffer = SWORDBUFFER;
+      kris.swordfacing = kris.facing;
+      kris.canfreemove = false;
+      // snd_play(choose(snd_board_sword1, snd_board_sword2, snd_board_sword3))
+    }
+
+    if (kris.swordbuffer > 0) {
+      kris.swordbuffer -= 1;
+      const b = kris.swordbuffer;
+
+      // Redirect: on 7/6/5/4 and 0 a held direction re-aims the swing.
+      if (b === 7 || b === 6 || b === 5 || b === 4 || b === 0) {
+        if (held.has('d')) kris.swordfacing = FACE_DOWN;
+        if (held.has('u')) kris.swordfacing = FACE_UP;
+        if (held.has('r')) kris.swordfacing = FACE_RIGHT;
+        if (held.has('l')) kris.swordfacing = FACE_LEFT;
+        // At 4 the live hitbox is re-aimed and its timer restarts.
+        if (b === 4 && kris.swordhitbox) {
+          kris.swordhitbox.facing = kris.swordfacing;
+          kris.swordhitbox.timer = 0;
+        }
+      }
+      kris.facing = kris.swordfacing;
+
+      // At 6 the old hitbox is destroyed and a new one made at Kris.
+      if (b === 6) {
+        kris.swordhitbox = { facing: kris.facing, timer: 0, lv: kris.swordlv };
+      }
+      if (b === 0) kris.canfreemove = true;
+    }
+
+    // The hitbox itself: positioned from its facing, and destroyed at
+    // timer 5.
+    if (kris.swordhitbox) {
+      const hb = kris.swordhitbox;
+      const [ox, oy, w, h] = SWORD_BOXES[hb.facing];
+      const box = { x: kris.x + ox, y: kris.y + oy, w, h };
+      hb.box = box;
+      foes.swordHit(box, hb.facing, kris.swordlv);
+      hb.timer += 1;
+      if (hb.timer >= 5) kris.swordhitbox = null;
+    }
+
+    // The level-up, from the end of the Step.
+    if (kris.xp >= kris.xptolevel) {
+      kris.xp = 0;
+      kris.swordlv = Math.min(5, kris.swordlv + 1);
+      // snd_board_ominous
+      kris.xptolevel = { 2: 24, 3: 15, 4: 14, 5: 68 }[kris.swordlv] ?? 68;
+    }
+  }
+
+  /* The sword pickup — obj_board_pickup, one per level, at the position the
+     room places it. The game plays a whole cutscene here (the camera, the
+     music starting, Kris holding it overhead); this takes the sword and
+     starts the level's music-less equivalent, and says so on the page. */
+  const pickup = room.pickup
+    ? { x: room.pickup.x + moveX, y: room.pickup.y + moveY, taken: false }
+    : null;
+
+  function stepPickup() {
+    if (!pickup || pickup.taken || kris.sword) return;
+    // obj_board_interactable: you have to be on it and press the button.
+    const near = kris.x < pickup.x + 32 && kris.x + KRIS_SIZE > pickup.x - 8
+              && kris.y < pickup.y + 32 && kris.y + KRIS_SIZE > pickup.y - 8;
+    if (near && press1) {
+      pickup.taken = true;
+      kris.sword = true;
+    }
+  }
+
   /* obj_board_death_event_sword. Its Step is `exit` — the whole sequence
      lives in the Draw, on a frame counter. */
   function startDeath() {
@@ -522,6 +659,13 @@ export async function runBoard(canvas, level, opts = {}) {
     kris.hitmove = 0;
     kris.hitx = 0; kris.hity = 0;
     kris.blend = 'white';
+    kris.swordbuffer = 0;
+    kris.swordhitbox = null;
+    kris.xp = 0;
+    kris.swordlv = 1;
+    kris.xptolevel = room.number === 2 ? 10 : 3;
+    kris.sword = opts.sword ?? false;
+    if (pickup) { pickup.taken = false; }
     shift = 'none';
     moving = 0;
     healthbarFlash = 0;
@@ -577,13 +721,34 @@ export async function runBoard(canvas, level, opts = {}) {
     ctx.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
     drawTiles();
 
+    // The sword, waiting to be picked up.
+    if (pickup && !pickup.taken && !kris.sword) {
+      if (keySprite) {
+        ctx.drawImage(keySprite, Math.round(pickup.x), Math.round(pickup.y),
+          keySprite.width * 2, keySprite.height * 2);
+      } else {
+        ctx.fillStyle = '#ffffff';
+        ctx.fillRect(Math.round(pickup.x) + 12, Math.round(pickup.y) + 4, 8, 26);
+      }
+    }
+
     foes.draw(ctx, enemySprites);
 
-    const frames = krisSprite[FACE_NAME[kris.facing]];
-    const frame = frames[Math.floor(kris.imageIndex) % frames.length];
+    // Mid-swing Kris uses the strike sprites, which are twice his size on
+    // the swing's axis and hang off him by their origins.
+    let frame, dx = 0, dy = 0, dw = KRIS_SIZE, dh = KRIS_SIZE;
+    if (kris.swordbuffer > 0 && strikeSprite[FACE_NAME[kris.facing]].length) {
+      const set = strikeSprite[FACE_NAME[kris.facing]];
+      frame = set[Math.min(set.length - 1, STRIKE_FRAME[kris.swordbuffer] ?? 0)];
+      [dx, dy] = STRIKE_OFFSET[kris.facing];
+      dw = frame.width * 2; dh = frame.height * 2;
+    } else {
+      const frames = krisSprite[FACE_NAME[kris.facing]];
+      frame = frames[Math.floor(kris.imageIndex) % frames.length];
+    }
     // image_blend: white is the sprite untouched, red is the hit flash.
     const art = kris.blend === 'red' ? tinted(frame, '#ff0000') : frame;
-    ctx.drawImage(art, Math.round(kris.x), Math.round(kris.y), KRIS_SIZE, KRIS_SIZE);
+    ctx.drawImage(art, Math.round(kris.x) + dx, Math.round(kris.y) + dy, dw, dh);
 
     ctx.restore();
 
@@ -610,11 +775,6 @@ export async function runBoard(canvas, level, opts = {}) {
     if (healthbarFrame.length) {
       const f = healthbarFrame[kris.myhealth <= 0 ? 1 : 0] ?? healthbarFrame[0];
       if (f) ctx.drawImage(f, HEALTHBAR_X, HEALTHBAR_Y, f.width * 2, f.height * 2);
-    } else {
-      // No frame art yet — the outline stands in for it, and says so.
-      ctx.strokeStyle = '#8a8a8a';
-      ctx.lineWidth = 1;
-      ctx.strokeRect(HEALTHBAR_X + 13.5, HEALTHBAR_Y + 11.5, 51, 7);
     }
     ctx.fillStyle = healthbarFlash > 0 ? '#ff0000' : HEALTHBAR_COLOR;
     ctx.fillRect(HEALTHBAR_X + 14, HEALTHBAR_Y + 12, Math.round(amt * 50), 6);
@@ -644,15 +804,19 @@ export async function runBoard(canvas, level, opts = {}) {
         // `global.interact = 1` — the board stops dead and only the death
         // event runs.
         stepDeath();
+        press1 = false;
         if (death.timer >= DEATH_END) restart();
         continue;
       }
       stepShift();
       stepKris();
       stepAnim();
+      stepSword();
+      stepPickup();
       foes.step(kris);
       stepDamage();
       if (healthbarFlash > 0) healthbarFlash -= 1;
+      press1 = false;          // consumed; it is a pressed-edge, not a hold
     }
     draw();
     raf = requestAnimationFrame(frame);
@@ -669,6 +833,12 @@ export async function runBoard(canvas, level, opts = {}) {
     get shift() { return shift; },
     get world() { return world; },
     get health() { return kris.myhealth; },
+    get sword() { return kris.sword; },
+    set sword(v) { kris.sword = !!v; },
+    get swordlv() { return kris.swordlv; },
+    get xp() { return kris.xp; },
+    get pickup() { return pickup; },
+    swing() { press1 = true; },
     get dying() { return death !== null; },
     solids,
     get foes() { return foes; },

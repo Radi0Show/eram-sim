@@ -104,8 +104,11 @@ identical one.
 
 ## [x] Contact damage, and the switch that governs it
 
-**Contact does not hurt you in level 1, and it never will.** This is the
-finding that shapes everything else here. `scr_board_enemy_init` gives every
+**Contact does not hurt you in level 1 — until you level the sword.**
+(Corrected: an earlier pass of this document said "and it never will",
+having read `violence` and stopped there. The monster's own Step overrides
+it — see "The sword" below. The `violence` half is still exactly as
+described here.) `scr_board_enemy_init` gives every
 enemy
 
 ```gml
@@ -133,10 +136,14 @@ so it is moot there.
 monster's Create picks that art for `room_board_1_sword || room_board_2_sword`
 both, so it is the sword route's outlined style, not a behaviour.)
 
-**The hazard you actually touch is not the enemy.** `scr_board_enemy_init`
-creates `damage_hitbox = obj_board_enemy_contact_hitbox` at `(x+16, y+16)`
-and re-pins it there every step; the hitbox carries `damage = 2`, while the
-enemy's own `damage` is 1 and never lands. Two damage against `maxhealth 12`
+**The hazard you actually touch is not the enemy, and it is smaller than
+the enemy.** `scr_board_enemy_init` creates `damage_hitbox =
+obj_board_enemy_contact_hitbox` at `(x+16, y+16)` and re-pins it there every
+step; the hitbox carries `damage = 2`, while the enemy's own `damage` is 1
+and never lands. Its sprite is **`spr_hitbox_10px_center`, 10x10, origin
+(5,5)**, drawn at scale 2 — so the damaging area is a **20x20 box centred on
+the enemy, 6px in from each edge of its 32x32 tile**, not the whole tile.
+(Corrected: the first damage pass assumed the full tile.) Two damage against `maxhealth 12`
 is six hits, which the shadowmantle branch spells out as
 `numberofhitskriscantake = 6`.
 
@@ -179,20 +186,109 @@ being `spr_whitepx` stretched to `round(healthamt * 50) x 6` at (+14,+12) in
 `obj_ch3_gameshow` makes exactly one bar, for Kris, at (270,34); the
 three-bar party layout at (128/222/316, 32) is the non-sword one.
 
+
+## [x] The sword
+
+**Where it comes from.** `sword = false` at Create for all three sword
+rooms — it is only true at Create for the dungeons and the mantle rooms.
+Each level holds exactly one `obj_board_pickup` (sprite `spr_board_key`,
+scale 2) and its Step ends `player.sword = true`. The positions are
+(2224,176), (4144,400) and (2608,400); they are in the level JSON now.
+
+**The swing is eight frames.** `press_1` sets `swordbuffer = 8` and drops
+`canfreemove`; the buffer counts 7..0 and control returns at 0.
+
+| buffer | what happens |
+|---|---|
+| 7,6,5,4,0 | a direction press still re-aims the swing |
+| 6 | the old hitbox is destroyed and a new one created at Kris |
+| 4 | the live hitbox is re-aimed and its timer restarts |
+| 0 | `canfreemove` returns |
+
+`image_index` runs 0,0,1,1,1,2,0,0 across those frames. The hitbox itself
+destroys at `timer == 5`.
+
+**The hitbox geometry is all origins.** `spr_board_swordhitbox_vert` is
+11x25 origin (1,8); `_horiz` is 25x11 origin (8,1); both drawn at scale ±2,
+and the negative flips the box back across its origin, which is how up and
+left reach backwards. Worked through, relative to Kris's top-left corner:
+
+| facing | box (x, y, w, h) |
+|---|---|
+| down | 0, 16, 22, 50 |
+| right | 16, 12, 50, 22 |
+| up | 8, -34, 22, 50 |
+| left | -34, 12, 50, 22 |
+
+Each reaches 50px from Kris's centre along its axis and 22 across. Down and
+up sit a couple of pixels off-centre because the game offsets them by +2 and
++10; those asymmetries are kept.
+
+**A hit needs `swordlv >= sword_immunity_lv`.** Below it, or against the
+gray monster (`hp 999`), the blade rings off (`snd_board_sword_metal`) and
+only sets `hurttimer = 10`. Otherwise: `hurttimer = 10`, `active_hitbox =
+false`, `hitdir = kris.facing`, `hp--`. The immunity levels come from the
+spawner dispatch and are in the level data now — index 0 monsters are 1,
+the yellow (index 2) is 2, the orange (index 3) is 3, flowers and one
+bluefish variant are 2.
+
+**Death lands one frame after the hit.** `scr_board_enemy_hurt_state` runs
+`hurttimer--` and then, `if (hurttimer == 9 && hp <= 0)`, creates the splash,
+adds `xp_given` (1) to Kris, destroys the enemy **and its spawner** — so a
+cleared screen stays cleared — and rolls for a candy drop (5%, +20 under 8
+health, +30 under 3, 0 at full, with a pity rule at 6 kills). While
+`hurttimer > 6` the enemy is knocked up to 20px a frame along `hitdir`, one
+pixel at a time, stopping at the first wall. Enemies are also clamped to
+**x 160..448, y 96..256** — tighter than the player's own bounds.
+
+**Levelling:** `xptolevel` is 3 by default and **10 in level 2**. On
+`xp >= xptolevel`: `xp = 0`, `swordlv++` (clamped 1..5), and the next
+threshold comes from a table — 24, 15, 14, 68 for levels 2..5.
+
+### The thing the sword actually changes
+
+The monster's Step, every frame:
+
+```gml
+var chaseplayer = true;
+if (136 && obj_mainchara_board.swordlv > 1)   // `136` is a decompiler artifact
+    aggressive = true;
+if (!aggressive) { active_hitbox = false; chaseplayer = false; }
+```
+
+`aggressive` gates **both** the hitbox and the chase — a docile monster does
+not merely fail to hurt you, it does not follow you either — and **swordlv >
+1 forces it true regardless of `violence`**. In `room_board_1_sword` the same
+block also re-derives `spd` (2 at swordlv 1, 3 above) and `image_speed` every
+frame, so enemies already on the board speed up the moment you level.
+
+Level 1's `xptolevel` is 3. **Kill three monsters and the whole board turns
+on you.** Verified in the sim as an A/B on one monster with `violence` still
+false: at swordlv 1 `aggressive=false` and standing inside it costs nothing;
+set swordlv to 2 and nothing else, and the same monster reads
+`aggressive=true`, `spd` goes 2→3, and standing in it costs 2 health.
+
+Aggression latches — the rule only ever sets it, never clears it, so
+dropping back to swordlv 1 leaves a woken monster awake. That is the game's
+behaviour, not a simplification.
+
 ## [ ] Still to do — in order
 
-1. **The sword.** `obj_mainchara_board`'s Create carries `sword`, `swordlv`,
-   `xp`, `xptolevel` — and level 2 sets `xptolevel = 10`, the dungeons 4 and
-   68. The attack itself is `swordbuffer` / `swordhitbox` in its Step. This
-   is also what turns `violence` on, so it is what makes the damage above
-   reachable without the page's debug switch.
-2. **The other four enemy behaviours.** Flower, bluefish, lizard and
-   bluebird spawn and draw but hold station.
-3. **Decoration that moves.** Tree spawners, waterfalls, `screenColorChanger`
+1. **The other four enemy behaviours.** Flower, bluefish, lizard and
+   bluebird spawn, draw, take sword hits and die, but hold station.
+2. **The chase, properly.** The monster re-evaluates aggro only when it
+   lands on a 32px cell boundary, paths with `mp_grid_path`, and re-paths on
+   a timer keyed to `spd` (12 frames at spd 3), giving up at distance 70.
+   The sim currently steps toward Kris on the dominant axis and checks the
+   radius every frame — same shape, wrong cadence, and it is why enemies
+   here glide rather than commit.
+3. **Candy and healing.** `obj_board_heal_pickup` and the drop roll in
+   `scr_board_enemy_hurt_state` are read but not built.
+4. **Decoration that moves.** Tree spawners, waterfalls, `screenColorChanger`
    (118 in level 2 — it tints per screen).
-4. **Warps.** `obj_board_warpentrance` / `obj_board_warptouch`, and the
+5. **Warps.** `obj_board_warpentrance` / `obj_board_warptouch`, and the
    camera's `shift = "warp"` branch.
-5. **The rank.** What actually scores a board.
+6. **The rank.** What actually scores a board.
 
 ## Deliberately out of scope
 

@@ -29,3 +29,18 @@ documents it where it happens.
 
 A fan project, unaffiliated with Toby Fox. DELTARUNE © Toby Fox —
 [support the official release](https://deltarune.com).
+
+## Rebuilding the assets
+
+The art is **not committed** — it is extracted from your own copy of the
+game (see `.gitignore`). Two steps, both idempotent:
+
+```sh
+tools/extract-sprites.sh        # sprites -> assets/*.png
+python3 tools/build-levels.py   # rooms   -> assets/levels/*.json
+```
+
+`build-levels.py` owns the level files completely — tiles, solids, enemy
+spawners and the sword pickup. **Do not hand-edit `assets/levels/*.json`**;
+it has already been done once and the next regeneration silently dropped
+every spawner.
