@@ -4,8 +4,21 @@
 trap catalog from knight-sim (the reference implementation, one directory
 over at ~/knight-sim). This project follows it exactly.
 
-**THEN: docs/RECON.md** — if its checkboxes are empty, recon is the task.
-No code before the fight table exists.
+**THEN: docs/RECON.md** — recon is DONE and the level table is in it.
+
+**WHAT THIS IS.** Not a bullet-hell fight: the sword route is Chapter 3's
+board game (the one ranked Z C B A S T) with one level handed to you after
+each of the three boards. Those three levels are the scope. The Shadow
+Mantle encounter and the boards proper are out of it.
+
+**WHERE IT IS.** `sim/board.js` is the engine — movement, the fixed-camera
+screen shift, collision — ported from the verified thedevice build and
+carrying its comments. `tools/build-levels.py` regenerates
+`assets/levels/*.json` from the research dumps; the level files are
+generated, never hand-edited. `tools/devserver.py` serves on port 8411, its
+own port on purpose.
+
+Next work is listed at the end of RECON.md, in order. Enemies first.
 
 Session basics (same machine as knight-sim):
 

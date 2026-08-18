@@ -1,17 +1,31 @@
-# Eram (sword route) Simulator
+# ERAM — the sword route
 
-A frame-accurate browser practice tool for the Eram (sword route) fight — the same
-project as [knight-sim](https://github.com/Radi0Show/knight-sim), for a
-different boss. Free, non-commercial, dodge-first.
+The three levels DELTARUNE Chapter 3 hands you on the sword route, one after
+each board of its ranked board game, rebuilt from the rooms themselves.
 
-**Status: scaffold.** No code yet — this repo starts with the method:
+**Status: the levels are walkable.** Tiles, collision and the board's real
+camera are in; enemies, the sword and the warps are not. See
+[docs/RECON.md](docs/RECON.md) for what is done and what is next, in order.
 
-- [docs/PLAYBOOK.md](docs/PLAYBOOK.md) — the complete end-to-end method and
-  every lesson the Roaring Knight project paid for. Read it first, whole.
-- [docs/RECON.md](docs/RECON.md) — the questions to answer from the dump
-  before any code.
-- Chapter data: TBD in recon — locate the boss by grepping the chapter dumps (chapters 3-5 present in the bundle); do not trust secondhand chapter claims.
+```sh
+python3 tools/devserver.py        # http://localhost:8411
+```
 
-The working session copies the boss-agnostic engine core from knight-sim
-(the playbook lists the files), builds this boss's private research repo
-locally, and proceeds phase by phase per PLAYBOOK §10.
+| # | room | size |
+|---|---|---|
+| 1 | `room_board_1_sword` | 6220x1920 — desert |
+| 2 | `room_board_2_sword` | 5184x4736 — water |
+| 3 | `room_board_3_sword` | 3968x3392 — the approach |
+
+The level data is **generated**, not authored: `tools/build-levels.py` reads
+the room dumps and writes `assets/levels/*.json`. If a number looks wrong,
+fix the script and re-run — do not edit the JSON.
+
+**The mechanic worth knowing before changing anything:** the camera never
+moves. The screen is a fixed 384x256 window and Kris is clamped inside it;
+crossing an edge translates the entire world one screen over, and Kris is
+nudged 2px back each frame so he lands on the opposite bound. `sim/board.js`
+documents it where it happens.
+
+A fan project, unaffiliated with Toby Fox. DELTARUNE © Toby Fox —
+[support the official release](https://deltarune.com).

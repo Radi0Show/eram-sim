@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>ERAM — the sword route</title>
+<meta name="description" content="The three sword-route levels from DELTARUNE Chapter 3's board game, rebuilt from the rooms themselves.">
+<style>
+  * { margin:0; padding:0; box-sizing:border-box; }
+  html, body { height:100%; background:#000; overflow:hidden; }
+  body {
+    font-family:'Courier New', Courier, monospace;
+    font-weight:bold; color:#fff; text-transform:uppercase;
+    -webkit-font-smoothing:none; cursor:default;
+  }
+  /* Fill the display, bars on the short axis — what the game does in
+     fullscreen. Whole-pixel scaling is given up on purpose: filling wins. */
+  #board {
+    position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+    width:min(100vw, calc(100vh * 4 / 3));
+    height:min(100vh, calc(100vw * 3 / 4));
+    image-rendering:pixelated; background:#000;
+  }
+  .label { position:fixed; top:14px; left:16px; font-size:12px; color:#2e2e2e; z-index:5; letter-spacing:.1em; }
+  #levels {
+    position:fixed; top:12px; right:16px; z-index:5;
+    display:flex; gap:14px; font-size:12px; letter-spacing:.1em;
+  }
+  #levels button {
+    background:none; border:none; color:#5a5a5a; font:inherit;
+    text-transform:uppercase; cursor:pointer; padding:2px 4px;
+  }
+  #levels button.on { color:#ffff00; }
+  #levels button:hover, #levels button:focus-visible { color:#fff; outline:none; }
+  #keys {
+    position:fixed; bottom:24px; left:0; right:0; z-index:5;
+    text-align:center; font-size:11px; color:#2e2e2e; letter-spacing:.08em;
+  }
+  footer {
+    position:fixed; bottom:6px; left:0; right:0; z-index:5;
+    text-align:center; font-size:10px; color:#1c1c1c; letter-spacing:.08em;
+  }
+  footer a { color:#2e2e2e; text-decoration:none; }
+  #failed {
+    display:none; position:fixed; inset:0; z-index:60; background:#000;
+    flex-direction:column; align-items:center; justify-content:center; gap:1.2rem;
+    font-size:16px; line-height:1.9; text-align:center;
+  }
+</style>
+</head>
+<body>
+<div class="label" id="label">ERAM · SWORD ROUTE</div>
+<div id="levels"></div>
+
+<canvas id="board" width="640" height="480"
+        aria-label="A board level. Arrow keys or WASD walk Kris; the screen shifts a whole pane at a time."></canvas>
+
+<div id="keys">&#9664; &#9654; &#9650; &#9660; / WASD &middot; WALK TO THE EDGE AND THE SCREEN MOVES</div>
+
+<footer>
+  A FAN PROJECT &middot; UNAFFILIATED WITH TOBY FOX &middot; DELTARUNE &copy; TOBY FOX &middot;
+  <a href="https://deltarune.com" rel="noopener">SUPPORT THE OFFICIAL RELEASE</a>
+</footer>
+
+<div id="failed"><p>* THE LEVEL DID NOT LOAD.</p></div>
+
+<script type="module">
+  import { runBoard } from './sim/board.js';
+
+  const canvas = document.getElementById('board');
+  function fit() {
+    const f = Math.min(innerWidth / 640, innerHeight / 480);
+    canvas.style.width = `${640 * f}px`;
+    canvas.style.height = `${480 * f}px`;
+  }
+  addEventListener('resize', fit);
+  fit();
+
+  const index = await fetch('assets/levels/index.json').then((r) => r.json());
+  const bar = document.getElementById('levels');
+  const label = document.getElementById('label');
+  let running = null;
+
+  async function play(entry, btn) {
+    if (running) running.stop();
+    [...bar.children].forEach((b) => b.classList.toggle('on', b === btn));
+    label.textContent = `ERAM · ${entry.title}`;
+    try {
+      const level = await fetch(`assets/levels/${entry.file}`).then((r) => r.json());
+      running = await runBoard(canvas, level, { base: 'assets/' });
+    } catch (err) {
+      console.error('level failed to load:', err);
+      document.getElementById('failed').style.display = 'flex';
+    }
+  }
+
+  index.forEach((entry) => {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.textContent = `LEVEL ${entry.number}`;
+    b.addEventListener('click', () => play(entry, b));
+    bar.append(b);
+  });
+
+  if (index.length) play(index[0], bar.firstChild);
+</script>
+</body>
+</html>
