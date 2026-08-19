@@ -479,6 +479,24 @@ approximated (labelled).
 - The shopwriter itself: centered fnt_8bit, 2 frames a glyph,
   snd_board_text_main per glyph and _end at the end.
 
+## Round 3 (playtest): the party, the flora, the one-way sword rooms
+
+- **Killing Susie and Ralsei is the mechanic** (level 3):
+  obj_board_caterpillarchara's Step_2 tail — one sword hit destroys a
+  follower with a defeat splash, `swordlv++` with snd_board_ominous,
+  flag 1255++, and the manager's kpause: 30 frames where everything holds
+  (the overworld Kris's sideways glance has no stage here; the pause is
+  kept). Each kill grants a sword level.
+- **Ferns are walls** — obj_board_fern's parent is obj_board_solid, hp 1,
+  defense 1: one hit at swordlv 2+ fells it (splash), and the way opens.
+- **The sword rooms are one-way by design.** The corridor's mouth is
+  sealed by a room solid; the exit is the PICKUP's own take-sequence,
+  which warps you out (L1 -> 896,1344 player 1072,1456; L2 -> 1664,3136
+  player 1744,3216; L3 -> 1664,576 player 1856,704). Getting stuck there
+  was the missing warp, not a wall bug.
+- The page carries no text anymore; controls and labels moved to the
+  README.
+
 ## Still to do, if ever
 
 1. The tree-loop ghost helpers and the chest cinematic (level 1's key).

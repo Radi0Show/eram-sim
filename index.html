@@ -31,20 +31,6 @@
   #levels button.on { color:#ffff00; }
   #levels button:hover, #levels button:focus-visible { color:#fff; outline:none; }
   #levels .sep { color:#1c1c1c; }
-  #note {
-    position:fixed; bottom:40px; left:0; right:0; z-index:5;
-    text-align:center; font-size:10px; color:#4a3a1a; letter-spacing:.08em;
-    padding:0 2rem;
-  }
-  #keys {
-    position:fixed; bottom:24px; left:0; right:0; z-index:5;
-    text-align:center; font-size:11px; color:#2e2e2e; letter-spacing:.08em;
-  }
-  footer {
-    position:fixed; bottom:6px; left:0; right:0; z-index:5;
-    text-align:center; font-size:10px; color:#1c1c1c; letter-spacing:.08em;
-  }
-  footer a { color:#2e2e2e; text-decoration:none; }
   #failed {
     display:none; position:fixed; inset:0; z-index:60; background:#000;
     flex-direction:column; align-items:center; justify-content:center; gap:1.2rem;
@@ -60,21 +46,8 @@
 <canvas id="board" width="640" height="480"
         aria-label="A board level. Arrow keys or WASD walk Kris; Z swings the sword; the screen shifts a whole pane at a time."></canvas>
 
-<div id="keys">&#9664; &#9654; &#9650; &#9660; / WASD &middot; Z SWING &amp; TAKE &middot; M MUTE &middot; WALK TO THE EDGE AND THE SCREEN MOVES</div>
-<!-- PLAYBOOK RULE 4: anything unrepresentative is labelled where the player
-     sees it, not only in the docs. -->
-<div id="note">
-  NOT REPRODUCED: THE TREE-LOOP GHOSTS AND THE CHEST CINEMATIC &middot;
-  LEVEL ENDINGS SHOW A CARD INSTEAD OF ENTERING THE DUNGEONS &middot; DEATH
-  RESTARTS THE LEVEL &middot; TEXT PACING IS APPROXIMATE &middot; CRT IS THE
-  GAME&rsquo;S OWN SHD_CRT, TOGGLE IT OFF IF FLICKER BOTHERS YOU
-</div>
-
-<footer>
-  A FAN PROJECT &middot; UNAFFILIATED WITH TOBY FOX &middot; DELTARUNE &copy; TOBY FOX &middot;
-  <a href="https://deltarune.com" rel="noopener">SUPPORT THE OFFICIAL RELEASE</a>
-</footer>
-
+<!-- The page keeps quiet: controls, approximation labels and credits live
+     in the README (the user asked for a clean screen). -->
 <div id="failed"><p>* THE LEVEL DID NOT LOAD.</p></div>
 
 <script type="module">

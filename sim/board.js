@@ -130,7 +130,13 @@ export async function runBoard(canvas, level, opts = {}) {
   const water = shifted(room.water ?? []);
   const waterfalls = shifted(room.waterfalls ?? []);
   const treeSpawners = shifted(room.treeSpawners ?? []);
-  const props = shifted(room.props ?? []);
+  // obj_board_fern's parent is obj_board_solid: every fern is a wall, hp 1
+  // to the sword (defense 1 — swordlv 2 fells it, defeat splash and gone).
+  const rawProps = shifted(room.props ?? []);
+  const props = rawProps.filter((p) => p.sprite !== 'spr_board_fern');
+  const ferns = rawProps.filter((p) => p.sprite === 'spr_board_fern').map((f) => ({
+    ...f, solid: { x: f.x, y: f.y, w: 32, h: 32 },
+  }));
   const events = shifted(room.events ?? []);
   const docks = shifted(room.docks ?? []);
   const boats = shifted(room.boats ?? []).map((b) => ({
@@ -141,6 +147,7 @@ export async function runBoard(canvas, level, opts = {}) {
     solid: { x: c.x + 2, y: c.y + 2, w: 28, h: 28 },
   }));
   for (const c of cactus) solids.push(c.solid);
+  for (const f of ferns) solids.push(f.solid);
   const candies = [];                 // dropped + placed heal pickups
   const trees = [];                   // spawned by treeSpawners, per screen
 
@@ -268,10 +275,10 @@ export async function runBoard(canvas, level, opts = {}) {
       colorChangers, water, waterfalls, treeSpawners, props, events, docks, candies, trees]) {
       for (const o of arr) { o.x += dx; o.y += dy; }
     }
-    // The cactus body translates here; its solid is already IN `solids`
-    // and translates with them — touching it twice made the wall drift off
-    // the plant, one screen per shift.
+    // The cactus and fern bodies translate here; their solids are already
+    // IN `solids` and translate with them.
     for (const c of cactus) { c.x += dx; c.y += dy; }
+    for (const f of ferns) { f.x += dx; f.y += dy; }
     for (const b of boats) { b.x += dx; b.y += dy; }
     if (pickup) { pickup.x += dx; pickup.y += dy; }
     if (tenna) { tenna.marker.x += dx; tenna.marker.y += dy; }
@@ -654,6 +661,8 @@ export async function runBoard(canvas, level, opts = {}) {
       hb.box = { x: kris.x + ox, y: kris.y + oy, w, h };
       chopCactus(hb.box);
       chopTrees(hb.box);
+      chopFerns(hb.box);
+      hitFollowers(hb.box);
       hb.timer += 1;
       if (hb.timer >= 5) kris.swordhitbox = null;
     }
@@ -685,10 +694,47 @@ export async function runBoard(canvas, level, opts = {}) {
     }
   }
 
+  function chopFerns(box) {
+    // obj_board_fern's Step: swordlv > defense (1) — one hit, splash, gone.
+    if (kris.swordlv <= 1) return;
+    for (let i = ferns.length - 1; i >= 0; i--) {
+      const f = ferns[i];
+      if (f.dead) continue;
+      if (box.x < f.x + 32 && box.x + box.w > f.x && box.y < f.y + 32 && box.y + box.h > f.y) {
+        const si = solids.indexOf(f.solid);
+        if (si >= 0) solids.splice(si, 1);
+        foes.splashAt(f.x + 16, f.y + 16);
+        f.dead = true;
+      }
+    }
+  }
+
+  /* obj_board_caterpillarchara's Step_2 tail: ONE sword hit destroys a
+     follower — defeat splash, swordlv++ with snd_board_ominous, and the
+     kpause: 30 frames where everything holds while the player character
+     takes it in (the overworld Kris's sideways glance is machinery this
+     sim has no stage for; the pause is kept). */
+  let kpause = 0;
+
+  function hitFollowers(box) {
+    for (let i = followers.length - 1; i >= 0; i--) {
+      const f = followers[i];
+      const t = trail[Math.min(f.delay, Math.max(0, trail.length - 1))];
+      if (!t) continue;
+      if (box.x < t.x + 32 && box.x + box.w > t.x && box.y < t.y + 32 && box.y + box.h > t.y) {
+        foes.splashAt(t.x + 16, t.y + 16);
+        kris.swordlv = Math.min(5, kris.swordlv + 1);
+        snd('snd_board_ominous');
+        followers.splice(i, 1);
+        kpause = 30;
+      }
+    }
+  }
+
   function chopCactus(box) {
     for (let i = cactus.length - 1; i >= 0; i--) {
       const c = cactus[i];
-      if (c.hitwait > 0) continue;
+      if (c.dead || c.hitwait > 0) continue;
       if (box.x < c.x + 32 && box.x + box.w > c.x && box.y < c.y + 32 && box.y + box.h > c.y) {
         c.hp -= 1;
         c.hitwait = 10;
@@ -696,7 +742,8 @@ export async function runBoard(canvas, level, opts = {}) {
         if (c.hp <= 0) {
           const si = solids.indexOf(c.solid);
           if (si >= 0) solids.splice(si, 1);
-          cactus.splice(i, 1);
+          foes.splashAt(c.x + 16, c.y + 16);
+          c.dead = true;
         }
       }
     }
@@ -704,16 +751,37 @@ export async function runBoard(canvas, level, opts = {}) {
 
   /* ---------------- the pickup and candy ---------------- */
   function stepPickup() {
+    if (pickup && pickup.exitAt) {
+      pickup.exitAt -= 1;
+      if (pickup.exitAt === 0) {
+        pickup.exitAt = undefined;
+        const out = {
+          1: { warpx: 896, warpy: 1344, playerX: 1072, playerY: 1456 },
+          2: { warpx: 1664, warpy: 3136, playerX: 1744, playerY: 3216 },
+          3: { warpx: 1664, warpy: 576, playerX: 1856, playerY: 704 },
+        }[room.number];
+        startWarp(out);
+      }
+      return;
+    }
     if (pickup && !pickup.taken && !kris.sword) {
       const near = kris.x < pickup.x + 32 && kris.x + KRIS_SIZE > pickup.x - 8
         && kris.y < pickup.y + 32 && kris.y + KRIS_SIZE > pickup.y - 8;
       if (near && press1) {
+        press1 = false;
         pickup.taken = true;
         kris.sword = true;
-        // The pickup's Step: level music starts with the sword.
+        kris.canfreemove = false;
+        // The pickup's Step: level music starts with the sword...
         if (room.number === 1) audio.music('board_sword_music');
         if (room.number === 2) audio.music('board_sword_music', { pitch: 0.9 });
         if (room.number === 3) audio.music('board_ocean');
+        // ...and the take-sequence WARPS YOU OUT — the sword room is
+        // one-way by design (the pickup's own transition + instawarp):
+        //   L1 -> (896,1344) player (1072,1456)
+        //   L2 -> (1664,3136) player (1744,3216)
+        //   L3 -> (1664,576)  player (1856,704)
+        pickup.exitAt = 40;                    // the raise-the-sword beat
       }
     }
     for (let i = candies.length - 1; i >= 0; i--) {
@@ -975,6 +1043,7 @@ export async function runBoard(canvas, level, opts = {}) {
   function cactusTouch() {
     if (!kris.canfreemove && !kris.boat) return null;
     for (const c of cactus) {
+      if (c.dead) continue;
       if (kris.x < c.x + 32 && kris.x + KRIS_SIZE > c.x
         && kris.y < c.y + 32 && kris.y + KRIS_SIZE > c.y) {
         return { damage: 1, px: c.x, py: c.y };
@@ -1147,7 +1216,16 @@ export async function runBoard(canvas, level, opts = {}) {
     treeLoops = 0;
     shift = 'none'; moving = 0; warp = null;
     healthbarFlash = 0;
-    death = null; outro = null;
+    death = null; outro = null; kpause = 0;
+    if (pickup) pickup.exitAt = undefined;
+    for (const f of ferns) {
+      if (f.dead) { f.dead = false; solids.push(f.solid); }
+    }
+    for (const c of cactus) {
+      if (c.dead) { c.dead = false; c.hp = 3; solids.push(c.solid); }
+    }
+    followers.length = 0;
+    if (room.number === 3) followers.push({ name: 'susie', delay: 12 }, { name: 'ralsei', delay: 24 });
     tease = null; doorSeq = null; storeShown = false;
     if (tenna) { tenna.con = 0; tenna.marker.x = 3904 + moveX; tenna.marker.y = 1440 + moveY; }
     shopwriter.clear();
@@ -1295,7 +1373,13 @@ export async function runBoard(canvas, level, opts = {}) {
         drawSprite(t.cold ? 'spr_board_tree_cold' : 'spr_board_b1tree_left', t.cold ? t.frame : 0, t.x, t.y);
       }
     }
+    for (const f of ferns) {
+      if (f.dead || !onScreen(f.x, f.y)) continue;
+      if (f.flip === undefined) f.flip = Math.random() < 0.5;   // dir = choose(0,1)
+      drawSprite('spr_board_fern', f.imageIndex, f.x, f.y, { flipX: !!f.flip });
+    }
     for (const c of cactus) {
+      if (c.dead) continue;
       if (!onScreen(c.x, c.y)) continue;
       drawSprite(c.cc && c.cc.cold ? 'spr_board_cactus_cold' : 'spr_board_cactus', c.frame, c.x, c.y);
       const pulse = Math.abs(Math.sin(Math.floor(animClock / 6) / 3)) / 2;
@@ -1493,6 +1577,11 @@ export async function runBoard(canvas, level, opts = {}) {
         continue;
       }
       shopwriter.step();
+      if (kpause > 0) {
+        kpause -= 1;
+        press1 = false;
+        continue;
+      }
       if (writer.active) {
         // global.interact = 1: the board halts around the text box; the
         // enemies keep wandering, exactly as in the game.

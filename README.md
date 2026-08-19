@@ -16,6 +16,18 @@ and labelled on the page.
 python3 tools/devserver.py        # http://localhost:8411
 ```
 
+## Controls and approximations
+
+Arrows / WASD walk; **Z** swings the sword, takes pickups, advances text;
+**M** mutes. The page itself stays clean — what is approximate lives here:
+the tree-loop ghosts and the chest cinematic are not reproduced, level
+endings show a card instead of entering the dungeons, death restarts the
+level, text pacing approximates obj_writer, and the CRT is the game's own
+shd_crt (the page toggle turns it off if flicker bothers you).
+
+A fan project, unaffiliated with Toby Fox. DELTARUNE © Toby Fox —
+[support the official release](https://deltarune.com).
+
 | # | room | size |
 |---|---|---|
 | 1 | `room_board_1_sword` | 6220x1920 — desert |

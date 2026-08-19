@@ -842,9 +842,16 @@ export function createEnemies(level, opts = {}) {
     }
   }
 
+  /** The defeat splash, for anything outside the roster that dies to the
+   *  sword (trees, ferns, the party). */
+  function splashAt(x, y) {
+    fx.push({ x, y, t: 0, candy: false });
+    snd('snd_board_kill');
+  }
+
   return {
     enemies, projectiles,
-    spawnVisible, clearScreen, translate, step, touching, stun, draw, reset,
+    spawnVisible, clearScreen, translate, step, touching, stun, draw, reset, splashAt,
     get violence() { return violence; },
     set violence(v) { violence = !!v; },
     get count() { return enemies.length; },
