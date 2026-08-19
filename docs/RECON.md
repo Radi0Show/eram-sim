@@ -567,9 +567,22 @@ built from fresh room dumps:
   their own groundfire trails and contact damage 2), exactly the clone's
   own Step.
 
-## Still to do, if ever
+## Round 6: the embed surface, and two closures
 
-1. The tree-loop ghost helpers (the repeated Kris silhouettes).
+- **`sim/eram.js` is the embed contract** — `mountEram(canvas, { base,
+  audio?, startLevel?, onLevelChange, onExit })` runs the whole campaign on
+  any canvas, chains the seven levels itself, and touches no DOM. This is
+  the exact call thedevice's DEVICE_ROOM will make; index.html now runs on
+  it as the reference host.
+- **The tree-loop ghosts close as not-applicable**:
+  obj_board_swordroute_treehelper has NO draw event — in
+  room_board_1_sword it is invisible bookkeeping (stat copies + the
+  tree-destroyer). The visible silhouettes belong to
+  room_board_1_sword_trees, a room outside the route's boards.
+- The type-8 ultimate's bomb drops joined the spiral (bomb_spawn at
+  spin_a 40/100 onto random free cells, plus the right-edge one at 70).
+
+## Still to do, if ever
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
 

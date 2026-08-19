@@ -485,6 +485,11 @@ export function createMantle(host) {
         // phase 4's ultimate, reduced: the triple fireball spiral + bombs.
         fc.spinA = (fc.spinA ?? 0) + 0.5;
         fc.angle = (fc.angle ?? 0) + Math.max(1.5, 1.6 + Math.sin(fc.spinA / 6) * 1.2);
+        // obj_shadow_mantle_bomb_spawn at spin 40 and 100: a bomb onto a
+        // random free arena cell; at 70 one at the right edge.
+        if (fc.spinA === 40 || fc.spinA === 100) {
+          dropBomb(160 + irandom(9) * 32 + 16, 96 + irandom(5) * 32 + 29);
+        }
         if (fc.spinA === 70) dropBomb(464, 160 + irandom(2) * 32 + 29);
         if (fc.timer > 30 && fc.fireballs < 50) {
           if (fc.timer % 4 === 0) {

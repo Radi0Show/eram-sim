@@ -51,8 +51,9 @@
 <div id="failed"><p>* THE LEVEL DID NOT LOAD.</p></div>
 
 <script type="module">
-  import { runBoard } from './sim/board.js';
-  import { createAudio } from './sim/audio.js';
+  // This page is the reference host for the embed surface DEVICE_ROOM
+  // will use — one call, one canvas, the campaign chains itself.
+  import { mountEram } from './sim/eram.js';
 
   const canvas = document.getElementById('board');
   function fit() {
@@ -63,39 +64,32 @@
   addEventListener('resize', fit);
   fit();
 
-  const index = await fetch('assets/levels/index.json').then((r) => r.json());
   const bar = document.getElementById('levels');
   const label = document.getElementById('label');
-  const audio = createAudio('assets/');
-  let running = null;
   const levelButtons = [];
 
-  async function play(entry, btn) {
-    if (running) running.stop();
-    levelButtons.forEach((b) => b.classList.toggle('on', b === btn));
-    label.textContent = `ERAM · ${entry.title}`;
-    try {
-      const level = await fetch(`assets/levels/${entry.file}`).then((r) => r.json());
-      running = await runBoard(canvas, level, {
-        base: 'assets/', audio,
-        onComplete: (n) => {
-          // The game leaves for the dungeons here; the sim offers the next
-          // level instead.
-          const next = index.find((e) => e.number === n + 1);
-          setTimeout(() => { if (next) play(next, levelButtons[n]); }, 2000);
-        },
-      });
-    } catch (err) {
-      console.error('level failed to load:', err);
-      document.getElementById('failed').style.display = 'flex';
-    }
+  let eram;
+  try {
+    eram = await mountEram(canvas, {
+      base: 'assets/',
+      onLevelChange: (n, title) => {
+        label.textContent = `ERAM · ${title}`;
+        levelButtons.forEach((b, i) => b.classList.toggle('on', i === n - 1));
+      },
+      onExit: () => { label.textContent = 'ERAM · THE ROUTE IS COMPLETE'; },
+    });
+  } catch (err) {
+    console.error('mount failed:', err);
+    document.getElementById('failed').style.display = 'flex';
+    throw err;
   }
+  const audio = eram.audio;
 
-  index.forEach((entry) => {
+  eram.levels.forEach((entry) => {
     const b = document.createElement('button');
     b.type = 'button';
     b.textContent = `LEVEL ${entry.number}`;
-    b.addEventListener('click', () => play(entry, b));
+    b.addEventListener('click', () => eram.jump(entry.number));
     bar.append(b);
     levelButtons.push(b);
   });
@@ -136,7 +130,6 @@
       : `NO SWORD &middot; HP ${b.health}/12`;
   }, 100);
 
-  if (index.length) play(index[0], levelButtons[0]);
 </script>
 </body>
 </html>
