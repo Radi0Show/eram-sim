@@ -1503,5 +1503,19 @@
 "ox": 0,
 "oy": 0,
 "frames": 2
+},
+"obj_board_squaretransition_heart": {
+"w": 18,
+"h": 10,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_custommenu_arrow_nooutline": {
+"w": 12,
+"h": 8,
+"ox": 6,
+"oy": 4,
+"frames": 1
 }
 }

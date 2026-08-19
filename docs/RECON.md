@@ -447,11 +447,43 @@ Two more corrections from the same pass:
   only ever the object's default sprite. The cactus also pulses its spines
   (spr_board_cactus_spines merged toward #CBC83D), now drawn.
 
+## The text boxes and the intro wipe (added after playtest, round 2)
+
+**The intro is not a heart-shaped mask** — obj_board_squaretransition's
+Draw is seven full-width black bars over board rows 1..7, the top of the
+stack clearing every 15 frames, with a little two-half heart sprite
+(obj_board_squaretransition_heart) at (312,182)/(312,192) riding bars 4
+and 3. Reproduced exactly; the earlier "heart wipe" description was a
+guess off the variable name `special = "heart"`.
+
+**The board writer** (obj_board_writer + typer 100): a black 384x85 box
+sliding in at 16px/frame — to y 48 from above or y 218 from below, side
+picked by Kris's y against 192 — then the standard obj_writer in fnt_8bit,
+hspace 16 vspace 20, snd_text per glyph, the blinking advance arrow
+(sprite 2943 = spr_custommenu_arrow_nooutline). Commands honoured: \n,
+^n pauses, / page waits, % close, \cX colours. Exact obj_writer pacing is
+approximated (labelled).
+
+**The set pieces now play:**
+- The ice door: snd_noise x2, "UNLOCKED WITH THE ICE KEY" (rate 6, silent,
+  auto-closing), the door opens with snd_impact x2, #5AAFFF fade out.
+- The Tenna monologue: his back-turned sprite at (3904,1440); the trigger
+  runs all seven pages; the first movement afterwards spooks him into the
+  two-page getaway and he vanishes with snd_board_escaped at pitch 1.2.
+- The shadowtease: the Mantle flees upward at vspeed -8 trailing
+  afterimages, leaves "See you soon." (the shopwriter, textcol 0 — black,
+  as the game sets it), then the level ends.
+- The b1store sign: "BECOME STRONGER" / "BECAME STRONGER" (swordlv 3) /
+  "Having fun?" (black, past 3), typed on arrival with the sword.
+- The small pond: Z reads "IT'S A BEAUTIFUL LITTLE SPRING."
+- The shopwriter itself: centered fnt_8bit, 2 frames a glyph,
+  snd_board_text_main per glyph and _end at the end.
+
 ## Still to do, if ever
 
-1. The set-piece dialogue (shopwriter/bw_make text boxes).
+1. The tree-loop ghost helpers and the chest cinematic (level 1's key).
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
-3. The caterpillar catch-up interpolation, exactly.
+3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
 
 ## Deliberately out of scope
 

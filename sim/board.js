@@ -32,6 +32,7 @@ import { loadAtlas } from './sprites.js';
 import { createAudio } from './audio.js';
 import { loadFont } from './text.js';
 import { createCRT } from './crt.js';
+import { createWriter, createShopwriter } from './writer.js';
 
 const VIEW_W = 640, VIEW_H = 480;
 const PANE_X = 128, PANE_Y = 64, PANE_W = 384, PANE_H = 256;
@@ -99,6 +100,8 @@ export async function runBoard(canvas, level, opts = {}) {
   // The game's own shd_crt over the screen region; null when WebGL is out.
   const crt = await createCRT(base).catch(() => null);
   if (crt) crt.state.enabled = localStorage.getItem('eramsim.crt') !== '0';
+  const writer = createWriter(font, S, snd);
+  const shopwriter = createShopwriter(font, snd);
 
   const tileset = await new Promise((res, rej) => {
     const i = new Image();
@@ -271,6 +274,8 @@ export async function runBoard(canvas, level, opts = {}) {
     for (const c of cactus) { c.x += dx; c.y += dy; }
     for (const b of boats) { b.x += dx; b.y += dy; }
     if (pickup) { pickup.x += dx; pickup.y += dy; }
+    if (tenna) { tenna.marker.x += dx; tenna.marker.y += dy; }
+    if (tease) { tease.y += dy; for (const tr of tease.trail) { tr.x += dx; tr.y += dy; } }
     foes.translate(dx, dy);
     for (const t of trail) { t.x += dx; t.y += dy; }
     kris.x += dx; kris.y += dy;
@@ -733,6 +738,125 @@ export async function runBoard(canvas, level, opts = {}) {
   let outro = null;                    // {kind, t}
   let treeLoops = 0;                   // global.flag[1006]
 
+  /* ---------------- the set pieces ----------------
+     obj_board_1_sword_shadowtease, obj_board_b2s_icedoor,
+     obj_b2s_tennamonologue, obj_board_1_sword_b1store,
+     obj_board_smallpond_sword — each translated from its own Step and
+     driven here. */
+  let tease = null;                    // the Mantle fleeing, then the text
+  let doorSeq = null;                  // the ice door opening
+  const tenna = room.number === 2
+    ? { marker: { x: 3904 + moveX, y: 1440 + moveY }, con: 0, kx: 0, ky: 0 }
+    : null;
+  let storeShown = false;
+
+  function stepSetPieces() {
+    if (tease) {
+      tease.t += 1;
+      if (tease.t < 48) {
+        tease.y -= 8;                          // vspeed -8
+        if (tease.t % 4 === 0) tease.trail.push({ x: tease.e.x, y: tease.y, a: 1 });
+      }
+      for (const tr of tease.trail) tr.a -= 0.06;
+      if (tease.t === 48) {
+        // shopwriter.shopstring = "See you soon."; textcol = 0 (black)
+        shopwriter.show('See you soon.', { color: '#000000', y: 64 + 64 + 12 });
+      }
+      if (tease.t >= 200) {
+        shopwriter.clear();
+        tease = null;
+        beginOutro('shadowtease');
+      }
+      return;
+    }
+    if (doorSeq) {
+      doorSeq.t += 1;
+      if (doorSeq.t === 30) {
+        doorSeq.door.imageIndex = 1;           // the door opens
+        snd('snd_impact', { volume: 0.8, pitch: 0.5 });
+        snd('snd_impact', { volume: 0.6, pitch: 0.8 });
+      }
+      if (doorSeq.t === 60) {
+        retint('#5AAFFF', 8);
+        beginOutro('icedoor');
+        doorSeq = null;
+      }
+      return;
+    }
+    if (tenna && !writer.active) {
+      // obj_b2s_tennamonologue: the trigger starts the monologue; once it
+      // ends, the first MOVEMENT spooks him and he makes his getaway.
+      if (tenna.con === 0) {
+        const t = triggers.find((tr) => tr.extflag === 'b2s_tennamonologue');
+        if (t && kris.x < t.x + t.w && kris.x + KRIS_SIZE > t.x
+          && kris.y < t.y + t.h && kris.y + KRIS_SIZE > t.y) {
+          tenna.con = 1;
+          kris.canfreemove = false;
+          writer.open([
+            'PHEW^1! FINALLY^1, SOME\nPEACE AND QUIET!/',
+            '..^1. I WONDER...\nIF THEY EVEN \nLIKE THE GAME...?/',
+            "I'M TRYING MY BEST\nTO MAKE IT FUN^1, BUT.../",
+            'HERE AND THERE^1, \nSTRANGE THINGS ARE \nSHOWING THROUGH.../',
+            'OH^1, WHY DID I BASE \nIT OFF THIS STUPID \nOLD THING!!/',
+            "..^1. KRIS^1, OH^1, KRIS \nIF YOU COULD JUST \nSMILE..^1. LAUGH.../",
+            "TELL ME I'M DOING \nSOMETHING RIGHT... \nPLEASE.../%",
+          ], {
+            onClose: () => {
+              kris.canfreemove = true;
+              tenna.kx = kris.x; tenna.ky = kris.y;
+              tenna.con = 2;
+            },
+          });
+        }
+      } else if (tenna.con === 2) {
+        if (kris.x !== tenna.kx || kris.y !== tenna.ky) {
+          tenna.con = 3;
+          kris.canfreemove = false;
+          writer.open([
+            'WHAT THE? I HEAR \nFOOTSTEPS!/',
+            'NO GOOD\nI NEED TO MAKE \nMY GETAWAY/%',
+          ], {
+            onClose: () => {
+              kris.canfreemove = true;
+              snd('snd_board_escaped', { pitch: 1.2 });
+              tenna.con = 4;                   // the marker vanishes
+            },
+          });
+        }
+      }
+    }
+    // The store sign: on its screen, with the sword, the sign types out —
+    // "BECOME STRONGER" until swordlv 3, "BECAME STRONGER" at 3,
+    // "Having fun?" (in black) past it.
+    const store = events.find((e) => e.obj === '1_sword_b1store');
+    if (store) {
+      const on = store.x >= 128 && store.x <= 512 && store.y >= 64 && store.y <= 320;
+      if (on && kris.sword && !storeShown && !tease) {
+        storeShown = true;
+        if (kris.swordlv < 3) shopwriter.show('BECOME STRONGER');
+        else if (kris.swordlv === 3) shopwriter.show('BECAME STRONGER');
+        else shopwriter.show('Having fun?', { color: '#000000' });
+      }
+      if (!on && storeShown) {
+        storeShown = false;
+        if (!tease) shopwriter.clear();
+      }
+    }
+    // The spring: Z on the small pond.
+    if (press1 && room.number === 1 && !writer.active && kris.canfreemove
+      && shift === 'none' && !warp && !outro && !death) {
+      const pond = water.find((w) => w.type === 'smallpond_sword');
+      if (pond && kris.x < pond.x + 128 + 16 && kris.x + KRIS_SIZE > pond.x - 16
+        && kris.y < pond.y + 64 + 16 && kris.y + KRIS_SIZE > pond.y - 16) {
+        press1 = false;
+        kris.canfreemove = false;
+        writer.open(["IT'S A BEAUTIFUL LITTLE SPRING./%"], {
+          onClose: () => { kris.canfreemove = true; },
+        });
+      }
+    }
+  }
+
   function stepWarps() {
     if (!kris.canfreemove || shift !== 'none' || warp || death || outro) return;
     for (const w of warps) {
@@ -769,6 +893,16 @@ export async function runBoard(canvas, level, opts = {}) {
         startWarp({ warpx: 1280, warpy: 1088, playerX: 1280 + plx, playerY: 1088 + ply, instawarp: true });
         return;
       }
+      if (e.obj === '1_sword_shadowtease' && !outro && !tease && !e.fled) {
+        // Level 1's finale: the Mantle flees upward trailing afterimages
+        // (vspeed -8, an image every 4 frames, snd_board_mantle_move),
+        // leaves "See you soon." behind, and the level is done.
+        tease = { t: 0, e, y: e.y, trail: [] };
+        e.fled = true;
+        kris.canfreemove = false;
+        snd('snd_board_mantle_move');
+        return;
+      }
       if (e.obj === 'b2sword_boatwarp' && kris.boat) {
         // obj_board_b2sword_boatwarp: the boat sails into it, the boat is
         // destroyed, and Kris lands on foot at (4192,2240) —
@@ -781,16 +915,13 @@ export async function runBoard(canvas, level, opts = {}) {
         return;
       }
 
-      if (e.obj === '1_sword_shadowtease' && !outro) {
-        // Level 1's finale: the Mantle flees upward and the level is done.
-        beginOutro('shadowtease');
-        return;
-      }
     }
-    // The ice door — an interactable: Z within reach, and the ice key
-    // (carried since level 1) unlocks it. Its own sequence fades the set
-    // colour #5AAFFF down to black and leaves for the dungeon.
-    if (press1 && room.number === 2 && !outro) {
+    // The ice door — an interactable: Z within reach opens its sequence
+    // (obj_board_b2s_icedoor's Step, con 10..12): the "UNLOCKED WITH THE
+    // ICE KEY" box (rate 6, silent, unskippable), snd_noise twice, then the
+    // door opens with snd_impact and the set fades #5AAFFF down to black
+    // into the dungeon.
+    if (press1 && room.number === 2 && !outro && !doorSeq) {
       const door = events.find((e) => e.obj === 'b2s_icedoor');
       if (door) {
         const bx = door.x, by = door.y, bw = 96, bh = 62;
@@ -798,8 +929,14 @@ export async function runBoard(canvas, level, opts = {}) {
           && kris.y < by + bh + 40 && kris.y + KRIS_SIZE > by - 40;
         if (near) {
           press1 = false;
-          retint('#5AAFFF', 8);
-          beginOutro('icedoor');
+          kris.canfreemove = false;
+          snd('snd_noise', { volume: 0.8, pitch: 0.5 });
+          snd('snd_noise', { volume: 0.8, pitch: 0.7 });
+          writer.open(['UNLOCKED WITH THE\n\\cIICE KEY\\cW'], {
+            rate: 6, textsound: null, skippable: false, triangle: false, side: 1,
+            autoClose: 30,
+            onClose: () => { doorSeq = { t: 0, door }; },
+          });
           return;
         }
       }
@@ -945,22 +1082,35 @@ export async function runBoard(canvas, level, opts = {}) {
     for (const r of DEATH_REDS) if (t >= r.t) death.css = r.css;
   }
 
-  /* ---------------- the intro ---------------- */
-  // Each manager: screencolor fades black -> the level's colour over 60
-  // frames behind a heart-shaped wipe (obj_board_squaretransition,
-  // special = "heart"). The wipe is approximated as an opening heart mask
-  // and labelled on the page.
+  /* ---------------- the intro ----------------
+     obj_board_squaretransition, special = "heart": seven full-width black
+     bars over board rows 1..7, the top of the stack clearing every 15
+     frames (`if (timer % 15 == 0) baramount--`), with the little heart
+     (obj_board_squaretransition_heart, two halves at (312,182) and
+     (312,192), scale 1) riding bars 4 and 3. Behind it the manager fades
+     screencolor black -> the level colour over 60 frames. */
   let intro = { t: 0 };
   retint('#000000', 1);
   tv.color = '#000000';
 
   function stepIntro() {
     intro.t += 1;
+    if (kris.myhealth > kris.maxhealth) kris.myhealth = kris.maxhealth;
     if (intro.t === 1) retint(INTRO_COLOR[room.number], 60);
-    if (intro.t >= 75) {
+    if (7 - Math.floor(intro.t / 15) <= 0) {
       intro = null;
       tv.drawui = true;
       audio.music('board_ocean');
+    }
+  }
+
+  function drawIntro() {
+    const bars = 7 - Math.floor(intro.t / 15);
+    g.fillStyle = '#000';
+    for (let i = 0; i < bars; i++) {
+      g.fillRect(PANE_X, PANE_Y + (7 - i) * 32, PANE_W, 32);
+      if (i === 4) { const h = S.frame('obj_board_squaretransition_heart', 0); if (h) g.drawImage(h, 312, 182); }
+      if (i === 3) { const h = S.frame('obj_board_squaretransition_heart', 1); if (h) g.drawImage(h, 312, 192); }
     }
   }
 
@@ -998,6 +1148,9 @@ export async function runBoard(canvas, level, opts = {}) {
     shift = 'none'; moving = 0; warp = null;
     healthbarFlash = 0;
     death = null; outro = null;
+    tease = null; doorSeq = null; storeShown = false;
+    if (tenna) { tenna.con = 0; tenna.marker.x = 3904 + moveX; tenna.marker.y = 1440 + moveY; }
+    shopwriter.clear();
     foes.reset();
     intro = { t: 0 };
     tv.color = '#000000'; tv.drawui = false;
@@ -1111,6 +1264,7 @@ export async function runBoard(canvas, level, opts = {}) {
     }
     for (const e of events) {
       // The visible set pieces; markers (spr_board_event etc.) stay unseen.
+      if (e.fled) continue;                     // the tease, gone
       const visible = {
         sword_fakeentrance: 'spr_board_sword_fakeentrance',
         b1swordentrance: 'spr_board_downstairs',
@@ -1121,8 +1275,20 @@ export async function runBoard(canvas, level, opts = {}) {
         '1_sword_shadowtease': 'spr_shadow_mantle_idle',
       }[e.obj];
       if (visible && onScreen(e.x, e.y)) {
-        drawSprite(visible, e.obj === 'b3s_stanchion' ? e.imageIndex : animClock * 0.1, e.x, e.y);
+        drawSprite(visible, e.obj === 'b2s_icedoor' ? (e.imageIndex ?? 0)
+          : e.obj === 'b3s_stanchion' ? e.imageIndex : animClock * 0.1, e.x, e.y);
       }
+    }
+    // Tenna, waiting with his back turned — until he makes his getaway.
+    if (tenna && tenna.con < 4 && onScreen(tenna.marker.x, tenna.marker.y)) {
+      drawSprite('spr_board_npc_tenna_back', 0, tenna.marker.x, tenna.marker.y);
+    }
+    // The Mantle fleeing upward, afterimages trailing.
+    if (tease) {
+      for (const tr of tease.trail) {
+        if (tr.a > 0) drawSprite('spr_shadow_mantle_idle', animClock * 0.1, tr.x, tr.y, { alpha: Math.max(0, tr.a) * 0.5 });
+      }
+      if (tease.t < 60) drawSprite('spr_shadow_mantle_idle', animClock * 0.1, tease.e.x, tease.y);
     }
     for (const t of trees) {
       if (onScreen(t.x, t.y)) {
@@ -1275,16 +1441,14 @@ export async function runBoard(canvas, level, opts = {}) {
       g.fillStyle = `rgba(0,0,0,${a})`;
       g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
     }
-    if (intro) {
-      const a = Math.max(0, 1 - intro.t / 60);
-      g.fillStyle = `rgba(0,0,0,${a})`;
-      g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
-    }
+    if (intro) drawIntro();
     if (outro) {
       const a = Math.min(1, outro.t / 50);
       g.fillStyle = `rgba(0,0,0,${a})`;
       g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
     }
+    shopwriter.draw(g);
+    writer.draw(g);
     g.restore();
 
     drawTV();
@@ -1328,6 +1492,17 @@ export async function runBoard(canvas, level, opts = {}) {
         press1 = false;
         continue;
       }
+      shopwriter.step();
+      if (writer.active) {
+        // global.interact = 1: the board halts around the text box; the
+        // enemies keep wandering, exactly as in the game.
+        writer.step(kris, press1);
+        press1 = false;
+        foes.step(kris);
+        stepSetPieces();
+        if (healthbarFlash > 0) healthbarFlash -= 1;
+        continue;
+      }
       stepShift();
       stepKris();
       stepBoats();
@@ -1336,6 +1511,7 @@ export async function runBoard(canvas, level, opts = {}) {
       stepSword();
       stepPickup();
       stepWarps();
+      stepSetPieces();
       foes.step(kris);
       stepDamage();
       if (healthbarFlash > 0) healthbarFlash -= 1;
