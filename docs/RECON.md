@@ -401,16 +401,36 @@ and offers the next level; the dungeons are out of scope.
   tie-breaks.
 - The boat embark radius is "nearest boat within 200px" rather than the
   game's per-boat dock bookkeeping.
-- Susie and Ralsei do not follow in level 3 (obj_board_caterpillarchara).
+- Susie and Ralsei follow in level 3 by plain position history (target 12
+  and 24); the caterpillar's exact catch-up interpolation is approximated.
 - Level endings show a card instead of entering the dungeons.
+
+## Bugs found in play (fixed 2026-08-19)
+
+1. **The doorway ping-pong softlock.** A warp's landing overlaps the
+   warptouch going the other way (level 1's pair provably does — landing
+   (1200,172) vs touch (1184..1248, 160..179)), and an instant re-fire
+   bounced the player between rooms forever. Guard: a warptouch Kris is
+   standing on when a warp lands stays disarmed until he steps off it.
+2. **Trees had no collision.** obj_board_tree's PARENT is obj_board_solid —
+   every tree is a wall (and choppable only at swordlv 4; defense 3). The
+   art is spr_board_b1tree_left frozen at frame 0 (its Create zeroes
+   image_speed in sword rooms), not the small spr_board_tree.
+3. **Embedded-at-spawn softlock.** Level 3's own room data places Kris's
+   start overlapping a 10x4-cell solid (the door alcove) — so a solid Kris
+   is already inside must not block him; it only blocks entry. Same guard
+   protects every warp landing, plus the game's own treehelper rule (trees
+   touching Kris on arrival are destroyed).
+4. **The cactus solid drifted** (double translation) — its wall ended up a
+   screen away from the plant.
 
 ## Still to do, if ever
 
 1. The CRT filter over the pane (shd_crt, WebGL — same pipeline thedevice
    already runs for shd_crt2).
-2. The caterpillar followers in level 3.
-3. The set-piece dialogue (shopwriter/bw_make text boxes).
-4. The rank screen (out of the three-level scope; scr_get_rank_letter).
+2. The set-piece dialogue (shopwriter/bw_make text boxes).
+3. The rank screen (out of the three-level scope; scr_get_rank_letter).
+4. The caterpillar catch-up interpolation, exactly.
 
 ## Deliberately out of scope
 

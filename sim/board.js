@@ -137,6 +137,15 @@ export async function runBoard(canvas, level, opts = {}) {
   const candies = [];                 // dropped + placed heal pickups
   const trees = [];                   // spawned by treeSpawners, per screen
 
+  /* Level 3's caterpillar party: obj_board_caterpillarchara trails the
+     parent's position history (`target = 12` slots). Susie follows Kris,
+     Ralsei follows behind her. The exact catch-up interpolation is
+     approximated by the plain history — labelled. */
+  const followers = room.number === 3
+    ? [{ name: 'susie', delay: 12 }, { name: 'ralsei', delay: 24 }]
+    : [];
+  const trail = [];
+
   const pickup = room.pickup
     ? { x: room.pickup.x + moveX, y: room.pickup.y + moveY, taken: false }
     : null;
@@ -171,14 +180,31 @@ export async function runBoard(canvas, level, opts = {}) {
     snd, violence,
   });
 
+  /* A solid Kris is ALREADY inside does not block him — it lets him out.
+     Level 3's own room data places his start overlapping a 10x4-cell wall
+     band (the door alcove), so the game demonstrably allows walking out of
+     an overlap; it only forbids walking INTO one. Without this rule the
+     level-3 spawn is a softlock. */
   function meets(x, y) {
     for (const s of solids) {
-      if (x < s.x + s.w && x + KRIS_SIZE > s.x && y < s.y + s.h && y + KRIS_SIZE > s.y) return true;
+      if (x < s.x + s.w && x + KRIS_SIZE > s.x && y < s.y + s.h && y + KRIS_SIZE > s.y) {
+        const already = kris.x < s.x + s.w && kris.x + KRIS_SIZE > s.x
+          && kris.y < s.y + s.h && kris.y + KRIS_SIZE > s.y;
+        if (!already) return true;
+      }
     }
     return false;
   }
-  const boatMeets = (x, y) => boatSolids.some((s) =>
-    x < s.x + s.w && x + KRIS_SIZE > s.x && y < s.y + s.h && y + KRIS_SIZE > s.y);
+  const boatMeets = (x, y) => {
+    const b = boats.find((o) => o.engaged);
+    return boatSolids.some((s) => {
+      const hit = x < s.x + s.w && x + KRIS_SIZE > s.x && y < s.y + s.h && y + KRIS_SIZE > s.y;
+      if (!hit) return false;
+      const already = b && b.x < s.x + s.w && b.x + KRIS_SIZE > s.x
+        && b.y < s.y + s.h && b.y + KRIS_SIZE > s.y;
+      return !already;
+    });
+  };
 
   /* ---------------- input ---------------- */
   const held = new Set();
@@ -242,11 +268,33 @@ export async function runBoard(canvas, level, opts = {}) {
     for (const b of boats) { b.x += dx; b.y += dy; }
     if (pickup) { pickup.x += dx; pickup.y += dy; }
     foes.translate(dx, dy);
+    for (const t of trail) { t.x += dx; t.y += dy; }
     kris.x += dx; kris.y += dy;
   }
 
   /** Everything that happens the frame a screen becomes THE screen. */
   function arrive() {
+    // ANTI-SOFTLOCK GUARD (found in play, not in the dump): a warp's
+    // landing spot can overlap the warptouch that goes the other way —
+    // level 1's doorway pair does — and an instant re-fire ping-pongs the
+    // player between rooms forever. A warptouch Kris is standing on when a
+    // warp lands stays disarmed until he steps off it.
+    for (const w of warps) {
+      w.rearm = (kris.x < w.x + w.w && kris.x + KRIS_SIZE > w.x
+        && kris.y < w.y + w.h && kris.y + KRIS_SIZE > w.y);
+    }
+    trail.length = 0;                 // followers snap to Kris on arrival
+    // obj_board_swordroute_treehelper's Step_2: any tree touching Kris is
+    // destroyed — the game's own guard against landing inside the forest.
+    for (let i = trees.length - 1; i >= 0; i--) {
+      const t = trees[i];
+      if (t.x < kris.x + KRIS_SIZE && t.x + 32 > kris.x
+        && t.y < kris.y + KRIS_SIZE && t.y + 32 > kris.y) {
+        const si = solids.indexOf(t.solid);
+        if (si >= 0) solids.splice(si, 1);
+        trees.splice(i, 1);
+      }
+    }
     foes.spawnVisible(spawners);
     // The colour changer standing on this screen retints the set (16
     // frames, obj_board_screenColorChanger -> gameshow colorchange).
@@ -262,9 +310,16 @@ export async function runBoard(canvas, level, opts = {}) {
         ts.made = true;
         for (let i = 0; i < ts.cols; i++) {
           for (let j = 0; j < ts.rows; j++) {
-            const t = { x: ts.x + i * 32, y: ts.y + j * 32, cold: ts.cold,
-                        solid: null };
-            trees.push(t);
+            const tx = ts.x + i * 32, ty = ts.y + j * 32;
+            // obj_board_tree's parent is obj_board_solid — every tree is a
+            // wall. A tree that would spawn on top of Kris is skipped (the
+            // game destroys trees touching him at spawn).
+            if (tx < kris.x + KRIS_SIZE && tx + 32 > kris.x
+              && ty < kris.y + KRIS_SIZE && ty + 32 > kris.y) continue;
+            const solid = { x: tx, y: ty, w: 32, h: 32 };
+            solids.push(solid);
+            trees.push({ x: tx, y: ty, cold: ts.cold, solid,
+              frame: Math.floor(Math.random() * 2) });
           }
         }
       }
@@ -589,6 +644,7 @@ export async function runBoard(canvas, level, opts = {}) {
       const [ox, oy, w, h] = SWORD_BOXES[hb.facing];
       hb.box = { x: kris.x + ox, y: kris.y + oy, w, h };
       chopCactus(hb.box);
+      chopTrees(hb.box);
       hb.timer += 1;
       if (hb.timer >= 5) kris.swordhitbox = null;
     }
@@ -602,6 +658,21 @@ export async function runBoard(canvas, level, opts = {}) {
       if (room.number === 2 && kris.swordlv === 2) audio.music('board_ocean');
       // Level 1's manager: swordlv 4 goes ominous-quiet into the ocean.
       if (room.number === 1 && kris.swordlv === 4) audio.music('board_ocean');
+    }
+  }
+
+  function chopTrees(box) {
+    // obj_board_tree's Step: a sword hit fells it only when
+    // `sword.swordlv > defense` — defense 3, so the maxed blade.
+    if (kris.swordlv <= 3) return;
+    for (let i = trees.length - 1; i >= 0; i--) {
+      const t = trees[i];
+      if (box.x < t.x + 32 && box.x + box.w > t.x && box.y < t.y + 32 && box.y + box.h > t.y) {
+        const si = solids.indexOf(t.solid);
+        if (si >= 0) solids.splice(si, 1);
+        trees.splice(i, 1);
+        snd('snd_board_kill');
+      }
     }
   }
 
@@ -661,12 +732,11 @@ export async function runBoard(canvas, level, opts = {}) {
   function stepWarps() {
     if (!kris.canfreemove || shift !== 'none' || warp || death || outro) return;
     for (const w of warps) {
+      const over = kris.x < w.x + w.w && kris.x + KRIS_SIZE > w.x
+        && kris.y < w.y + w.h && kris.y + KRIS_SIZE > w.y;
+      if (w.rearm) { if (!over) w.rearm = false; continue; }
       if (w.kind !== 'warptouch') continue;   // entrances fire at the edge
-      if (kris.x < w.x + w.w && kris.x + KRIS_SIZE > w.x
-        && kris.y < w.y + w.h && kris.y + KRIS_SIZE > w.y) {
-        if (typeof w.warpx === 'number') startWarp(w);
-        return;
-      }
+      if (over && typeof w.warpx === 'number') { startWarp(w); return; }
     }
     for (const e of events) {
       const ew = 32 * (e.sx || 1), eh = 32 * (e.sy || 1);
@@ -912,6 +982,10 @@ export async function runBoard(canvas, level, opts = {}) {
     for (const b of boats) { b.engaged = false; b.embark = 0; b.disembark = 0; b.gone = false; }
     for (const t of triggers) t.fired = false;
     candies.length = 0;
+    for (const t of trees) {
+      const si = solids.indexOf(t.solid);
+      if (si >= 0) solids.splice(si, 1);
+    }
     trees.length = 0;
     for (const ts of treeSpawners) ts.made = false;
     treeLoops = 0;
@@ -923,6 +997,15 @@ export async function runBoard(canvas, level, opts = {}) {
     tv.color = '#000000'; tv.drawui = false;
     arrive();
     if (opts.onRestart) opts.onRestart();
+  }
+
+  function stepTrail() {
+    // The history advances only while Kris MOVES — when he stops, the
+    // party holds its spacing behind him instead of converging under him.
+    const moving = kris.x !== kris.nowx || kris.y !== kris.nowy;
+    if (!moving && trail.length) { trail[0].moving = false; return; }
+    trail.unshift({ x: kris.x, y: kris.y, facing: kris.facing, moving });
+    if (trail.length > 80) trail.pop();
   }
 
   function stepAnim() {
@@ -1032,7 +1115,9 @@ export async function runBoard(canvas, level, opts = {}) {
       }
     }
     for (const t of trees) {
-      if (onScreen(t.x, t.y)) drawSprite(t.cold ? 'spr_board_tree_cold' : 'spr_board_tree', animClock * 0.1, t.x, t.y);
+      if (onScreen(t.x, t.y)) {
+        drawSprite(t.cold ? 'spr_board_tree_cold' : 'spr_board_b1tree_left', t.cold ? t.frame : 0, t.x, t.y);
+      }
     }
     for (const c of cactus) {
       if (onScreen(c.x, c.y)) drawSprite(c.cc && c.cc.cold ? 'spr_board_cactus_cold' : 'spr_board_cactus', c.frame, c.x, c.y);
@@ -1051,6 +1136,18 @@ export async function runBoard(canvas, level, opts = {}) {
       if (b.gone) continue;
       const bobY = Math.abs(Math.sin(b.bob / 15) * 2);
       drawSprite('spr_board_raft', 0, b.x, b.y + bobY);
+    }
+
+    // The party, trailing behind (drawn under Kris, depth parent+5).
+    for (let fi = followers.length - 1; fi >= 0; fi--) {
+      const f = followers[fi];
+      const t = trail[Math.min(f.delay, Math.max(0, trail.length - 1))];
+      if (!t) continue;
+      const name = `spr_board_${f.name}_walk_${FACE_NAME[t.facing]}`;
+      const meta = S.meta(name);
+      if (!meta) continue;
+      const frame = t.moving ? Math.floor(animClock * 0.125) % meta.frames : 0;
+      drawSprite(name, frame, t.x, t.y);
     }
 
     foes.draw(g, S);
@@ -1212,6 +1309,7 @@ export async function runBoard(canvas, level, opts = {}) {
       stepShift();
       stepKris();
       stepBoats();
+      stepTrail();
       stepAnim();
       stepSword();
       stepPickup();

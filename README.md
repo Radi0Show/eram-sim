@@ -1,11 +1,16 @@
 # ERAM — the sword route
 
+**Play it:** <https://radi0show.github.io/eram-sim/>
+
 The three levels DELTARUNE Chapter 3 hands you on the sword route, one after
 each board of its ranked board game, rebuilt from the rooms themselves.
 
-**Status: the levels are walkable.** Tiles, collision and the board's real
-camera are in; enemies, the sword and the warps are not. See
-[docs/RECON.md](docs/RECON.md) for what is done and what is next, in order.
+**Status: complete.** All three levels play start to end — every enemy the
+rooms place (at the game's own half-frame cadence), projectiles, the sword,
+warps, the tree loop, the boat, candy, the TV set with per-screen colours,
+the real HUD, audio, the party trailing in level 3, and the three endings.
+The story set pieces, the CRT filter and the dungeon rooms are out of scope
+and labelled on the page.
 
 ```sh
 python3 tools/devserver.py        # http://localhost:8411

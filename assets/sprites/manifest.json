@@ -1426,5 +1426,75 @@
 "ox": 0,
 "oy": 0,
 "frames": 2
+},
+"spr_board_susie_hurt": {
+"w": 17,
+"h": 16,
+"ox": 1,
+"oy": 0,
+"frames": 1
+},
+"spr_board_tree_withered": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 1
+},
+"spr_board_ralsei_walk_down": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_ralsei_walk_left": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_ralsei_walk_up": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_susie_walk_up": {
+"w": 17,
+"h": 16,
+"ox": 1,
+"oy": 0,
+"frames": 2
+},
+"spr_board_ralsei_walk_right": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_b1tree_left": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 4
+},
+"spr_board_susie_walk_left": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_susie_walk_right": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
 }
 }
