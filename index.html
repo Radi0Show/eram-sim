@@ -65,9 +65,10 @@
      sees it, not only in the docs. -->
 <div id="note">
   NOT REPRODUCED: THE STORY SET PIECES (THE STORE, THE TENNA MONOLOGUE, THE
-  TREE-LOOP GHOSTS, THE CHEST CINEMATIC) &middot; THE CRT FILTER &middot; THE
-  HEART-SHAPED INTRO WIPE IS A PLAIN FADE &middot; LEVEL ENDINGS SHOW A CARD
-  INSTEAD OF ENTERING THE DUNGEONS &middot; DEATH RESTARTS THE LEVEL
+  TREE-LOOP GHOSTS, THE CHEST CINEMATIC) &middot; THE HEART-SHAPED INTRO WIPE
+  IS A PLAIN FADE &middot; LEVEL ENDINGS SHOW A CARD INSTEAD OF ENTERING THE
+  DUNGEONS &middot; DEATH RESTARTS THE LEVEL &middot; CRT IS THE GAME&rsquo;S
+  OWN SHD_CRT, TOGGLE IT OFF IF FLICKER BOTHERS YOU
 </div>
 
 <footer>
@@ -131,6 +132,20 @@
   sep.className = 'sep';
   sep.textContent = '·';
   bar.append(sep);
+
+  const crtBtn = document.createElement('button');
+  crtBtn.type = 'button';
+  const paintCrt = () => {
+    const on = window.__board ? window.__board.crt : true;
+    crtBtn.textContent = on ? 'CRT ON' : 'CRT OFF';
+    crtBtn.classList.toggle('on', on);
+  };
+  crtBtn.addEventListener('click', () => {
+    if (window.__board) window.__board.crt = !window.__board.crt;
+    paintCrt();
+  });
+  setTimeout(paintCrt, 2000);
+  bar.append(crtBtn);
 
   const mute = document.createElement('button');
   mute.type = 'button';

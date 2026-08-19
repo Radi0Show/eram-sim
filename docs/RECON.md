@@ -395,7 +395,6 @@ and offers the next level; the dungeons are out of scope.
 - The story set pieces are not reproduced: the b1store shop, the shadowtease
   writer text, the tenna monologue/entrance, the heartisland and northern
   lights rooms, the tree-loop ghost helpers, the chest cinematic.
-- The CRT filter (shd_crt with vignette/chromatic/glitch) is not applied.
 - The heart-shaped intro wipe is a plain fade.
 - The monster's chase is A* over the same grid, not mp_grid_path's exact
   tie-breaks.
@@ -424,13 +423,35 @@ and offers the next level; the dungeons are out of scope.
 4. **The cactus solid drifted** (double translation) — its wall ended up a
    screen away from the plant.
 
+## The CRT (added after playtest)
+
+`obj_board_controller`'s Draw, running the game's own `shd_crt` (extracted
+verbatim to assets/crt/shd_crt.frag) over the screen region (128,32)
+384x288 in WebGL: the RGB triad filter (amount 0.1), chromatic aberration
+(chromStrength 0.5), the vignette (scale 0.2, intensity pow(1.5,1.3)*18),
+time = crttimer stepping 0.5 mod 3 — and the glitch when a sword-carrying
+Kris takes a hit (crt_glitch 6, strength 10, decaying 1 a frame: jittered
+stretch offsets, randomized aberration, boosted filter). A page toggle
+turns it off for photosensitivity; the preference persists.
+
+Two more corrections from the same pass:
+
+- **Level 2 rendered the wrong tile layer.** The room has BOARD_Tiles_alt
+  above BOARD_Tiles; on the sword route the alt layer is HIDDEN
+  (obj_b2s_northernlightsroom, flag 1055 == 1). The builder took "the first
+  Tiles layer" and got the night variant — this is what made walls look
+  mirrored/wrong.
+- **Ferns flip at random** — obj_board_fern's Draw: `dir = choose(0, 1)`,
+  mirrored across x+32. And the sword pickup draws spr_board_sword (its
+  Step's `type == "sword"` branch, static, no spin) — spr_board_key was
+  only ever the object's default sprite. The cactus also pulses its spines
+  (spr_board_cactus_spines merged toward #CBC83D), now drawn.
+
 ## Still to do, if ever
 
-1. The CRT filter over the pane (shd_crt, WebGL — same pipeline thedevice
-   already runs for shd_crt2).
-2. The set-piece dialogue (shopwriter/bw_make text boxes).
-3. The rank screen (out of the three-level scope; scr_get_rank_letter).
-4. The caterpillar catch-up interpolation, exactly.
+1. The set-piece dialogue (shopwriter/bw_make text boxes).
+2. The rank screen (out of the three-level scope; scr_get_rank_letter).
+3. The caterpillar catch-up interpolation, exactly.
 
 ## Deliberately out of scope
 

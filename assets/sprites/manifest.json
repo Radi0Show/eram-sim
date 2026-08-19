@@ -1496,5 +1496,12 @@
 "ox": 0,
 "oy": 0,
 "frames": 2
+},
+"spr_board_cactus_spines": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
 }
 }

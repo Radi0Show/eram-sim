@@ -31,6 +31,7 @@ import { createEnemies, CONTACT_DAMAGE } from './enemies.js';
 import { loadAtlas } from './sprites.js';
 import { createAudio } from './audio.js';
 import { loadFont } from './text.js';
+import { createCRT } from './crt.js';
 
 const VIEW_W = 640, VIEW_H = 480;
 const PANE_X = 128, PANE_Y = 64, PANE_W = 384, PANE_H = 256;
@@ -95,6 +96,9 @@ export async function runBoard(canvas, level, opts = {}) {
   const font = await loadFont(base);
   const audio = opts.audio ?? createAudio(base);
   const snd = (n, o) => audio.play(n, o);
+  // The game's own shd_crt over the screen region; null when WebGL is out.
+  const crt = await createCRT(base).catch(() => null);
+  if (crt) crt.state.enabled = localStorage.getItem('eramsim.crt') !== '0';
 
   const tileset = await new Promise((res, rej) => {
     const i = new Image();
@@ -856,6 +860,8 @@ export async function runBoard(canvas, level, opts = {}) {
         kris.blend = 'red';
         kris.myhealth -= hazard.damage ?? CONTACT_DAMAGE;
         healthbarFlash = 2;
+        // `if (sword == true) { crt_glitch = 6; crt_glitchstrength = 10; }`
+        if (kris.sword && crt) { crt.state.glitch = 6; crt.state.glitchStrength = 10; }
         snd('snd_board_playerhurt');
         snd('snd_hurt1');
         foes.stun(kris);
@@ -1097,7 +1103,11 @@ export async function runBoard(canvas, level, opts = {}) {
       }
     }
     for (const p of props) {
-      if (onScreen(p.x, p.y)) drawSprite(p.sprite, p.imageIndex, p.x, p.y, { tint: p.color ?? null });
+      if (!onScreen(p.x, p.y)) continue;
+      if (p.flip === undefined && p.sprite === 'spr_board_fern') {
+        p.flip = Math.random() < 0.5;      // dir = choose(0, 1), per instance
+      }
+      drawSprite(p.sprite, p.imageIndex, p.x, p.y, { tint: p.color ?? null, flipX: !!p.flip });
     }
     for (const e of events) {
       // The visible set pieces; markers (spr_board_event etc.) stay unseen.
@@ -1120,7 +1130,11 @@ export async function runBoard(canvas, level, opts = {}) {
       }
     }
     for (const c of cactus) {
-      if (onScreen(c.x, c.y)) drawSprite(c.cc && c.cc.cold ? 'spr_board_cactus_cold' : 'spr_board_cactus', c.frame, c.x, c.y);
+      if (!onScreen(c.x, c.y)) continue;
+      drawSprite(c.cc && c.cc.cold ? 'spr_board_cactus_cold' : 'spr_board_cactus', c.frame, c.x, c.y);
+      const pulse = Math.abs(Math.sin(Math.floor(animClock / 6) / 3)) / 2;
+      drawSprite('spr_board_cactus_spines', c.frame, c.x, c.y,
+        { tint: pulse > 0.35 ? '#ffffff' : '#CBC83D' });
     }
     for (const d of docks) {
       if (onScreen(d.x, d.y)) drawSprite('spr_board_dock', 0, d.x, d.y);
@@ -1130,7 +1144,14 @@ export async function runBoard(canvas, level, opts = {}) {
       drawSprite('spr_board_candy', 0, c.x, c.y);
     }
     if (pickup && !pickup.taken && !kris.sword) {
-      drawSprite('spr_board_key', Math.floor(animClock * 0.2) % 7, pickup.x, pickup.y);
+      // obj_board_pickup's Step: `if (type == "sword") sprite_index =
+      // spr_board_sword` — all three levels' pickups carry type "sword" in
+      // their creation code; the key art was the object's default sprite.
+      if ((room.pickup.cc ?? {}).type === 'sword') {
+        drawSprite('spr_board_sword', 0, pickup.x, pickup.y);
+      } else {
+        drawSprite('spr_board_key', Math.floor(animClock * 0.2) % 7, pickup.x, pickup.y);
+      }
     }
     for (const b of boats) {
       if (b.gone) continue;
@@ -1268,6 +1289,7 @@ export async function runBoard(canvas, level, opts = {}) {
 
     drawTV();
     drawHUD();
+    if (crt) crt.apply(g, canvas);
 
     if (outro && outro.t > 60) {
       g.fillStyle = '#000';
@@ -1349,6 +1371,13 @@ export async function runBoard(canvas, level, opts = {}) {
     get violence() { return foes.violence; },
     set violence(v) { foes.violence = v; },
     audio,
+    get crt() { return crt ? crt.state.enabled : false; },
+    set crt(v) {
+      if (crt) {
+        crt.state.enabled = !!v;
+        localStorage.setItem('eramsim.crt', v ? '1' : '0');
+      }
+    },
     swing() { press1 = true; },
     /** Debug: jump to a screen. Same code path as a real warptouch. */
     warpTo(warpx, warpy, playerX, playerY) { startWarp({ warpx, warpy, playerX, playerY }); },

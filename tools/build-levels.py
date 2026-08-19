@@ -135,7 +135,14 @@ def build(room, number, title, out_dir):
 
     rd = json.load(open(tiles_path))
     inst = json.load(open(inst_path))['instances']
-    tiles = next(l for l in rd['layers'] if l['type'] == 'Tiles')
+    # Level 2 has TWO tile layers: BOARD_Tiles_alt (the northern-lights
+    # variant) above BOARD_Tiles. On the sword route the alt layer is
+    # HIDDEN (obj_b2s_northernlightsroom: flag 1055 == 1 ->
+    # layer_set_visible(alt, false)), so the level renders BOARD_Tiles.
+    # Taking "the first Tiles layer" here silently rendered the wrong walls.
+    tiles = next((l for l in rd['layers']
+                  if l['type'] == 'Tiles' and l.get('name') == 'BOARD_Tiles'),
+                 next(l for l in rd['layers'] if l['type'] == 'Tiles'))
     bg = next((l.get('color') for l in rd['layers'] if l['type'] == 'Background'), None)
     r = bg & 255 if bg else 0
     g = (bg >> 8) & 255 if bg else 0
