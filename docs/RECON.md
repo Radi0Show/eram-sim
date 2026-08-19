@@ -272,23 +272,145 @@ Aggression latches — the rule only ever sets it, never clears it, so
 dropping back to swordlv 1 leaves a woken monster awake. That is the game's
 behaviour, not a simplification.
 
-## [ ] Still to do — in order
+## [x] The full build — all three levels, and what each system really is
 
-1. **The other four enemy behaviours.** Flower, bluefish, lizard and
-   bluebird spawn, draw, take sword hits and die, but hold station.
-2. **The chase, properly.** The monster re-evaluates aggro only when it
-   lands on a 32px cell boundary, paths with `mp_grid_path`, and re-paths on
-   a timer keyed to `spd` (12 frames at spd 3), giving up at distance 70.
-   The sim currently steps toward Kris on the dominant axis and checks the
-   radius every frame — same shape, wrong cadence, and it is why enemies
-   here glide rather than commit.
-3. **Candy and healing.** `obj_board_heal_pickup` and the drop roll in
-   `scr_board_enemy_hurt_state` are read but not built.
-4. **Decoration that moves.** Tree spawners, waterfalls, `screenColorChanger`
-   (118 in level 2 — it tints per screen).
-5. **Warps.** `obj_board_warpentrance` / `obj_board_warptouch`, and the
-   camera's `shift = "warp"` branch.
-6. **The rank.** What actually scores a board.
+Everything below was read from the dump and verified against the running
+sim; the traps found on the way are inline.
+
+**Enemy lifetime (this corrected the whole earlier model).** The moment a
+shift begins, `obj_board_camera` destroys EVERY enemy and projectile
+(`with (obj_board_enemy_parent) instance_destroy()` plus the per-projectile
+list). At con 98 every spawner still alive inside the player's bounds fires
+again. Enemies are strictly per-screen; only a killed spawner stays gone.
+The earlier "spawn once" set was wrong.
+
+**Cadence.** Monster, bluefish and lizard Steps open with
+`updatetimer++; if (updatetimer == 2) { updatetimer = 0; exit; }` — they act
+every other frame, and all their timers count acting frames. The bluebird
+has the same gate inverted. THE FLOWER HAS NO GATE and runs at full rate.
+Projectiles move every third frame (pellet spd 8, spear spd 20).
+
+**The monster, in full.** Wanders cell to cell (1px substeps, bounce off
+walls and the 160..448/96..256 enemy clamp — tighter than the player's own
+bounds and applied every acting frame by scr_board_enemy_hurt_state's tail).
+Aggro is re-evaluated only when it lands on a cell boundary
+(`distance_to_object < 90`, bbox distance); the chase is `mp_grid_path` to
+Kris's cell (his y biased +18) re-pathed on a spd-keyed timer (16 at spd 2,
+12 at 3, 9 at 4), giving up at 70. **Type-0 monsters never show the angry
+sprite** — the angry art is the spear telegraph (`bulletimer >
+shoot_wait_time`), and only type 1 increments bulletimer. Level 1 places
+TEN type-1 (yellow) monsters via spawner index 2 — the earlier claim that
+no variant is reachable was wrong (the variant comes from the spawner's
+image_index, not creation code). Spears: spd 20, aimed by four probe
+rectangles in source order (down, left, right, up — last hit wins), thrown
+only while chasing with the player on screen, from 30 acting frames of
+telegraph (22 threshold for the angry art).
+
+**The flower.** Level 1: inert until swordlv > 1, then armed. Level 2:
+armed the moment Kris HAS the sword, and its sword_immunity_lv drops to 0.
+Shoots an aimed pellet (active at t5, dies at t160, destroyed on hit) on a
+bubbletimer that resets to choose(-30,-16,-60); telegraph sprite at 16, back
+at 30. Its contact hitbox is scaled to 0.25 — 2.5px; the pellets are the
+threat.
+
+**The bluefish.** Wanders cells against obj_board_solidfish (id 1066 — its
+own wall set). Dash at spd 15 when row-aligned (needs `aggressive`) or
+column-aligned (needs swordlv > 1) with Kris; the "line of sight" test
+resolves to id 711 = **obj_nothing** in the sword rooms, so alignment alone
+triggers. The dash ends on the wall: snap to cell, ~15 acting frames of
+recovery. In level 1 nothing ever sets its aggression, so pond fish dash
+but cannot hurt — the game's own code.
+
+**The lizard** (level 2, index 10, type 0 — hp 2: its Create overrides
+init's 1). At rest picks walk / idle-shuffle / jump with lastattack rules;
+the jump telegraphs a red cell from the 11x3 grid at (128,128) and arcs
+there over ~32 acting frames (only one lizard airborne at a time, 50-frame
+refractory for all). Shoots pellets from its face at rest (bulletimer 28,
+reset choose(-50,-25,0)).
+
+**The bluebird** (level 1, index 13 → obj_board_enemy_bluebird_board1 in
+this room). hp 8, sword_immunity_lv 4, flies between six fixed screen
+points, only hittable while grounded (yoffset > -15). Its aggression is
+never overridden, so in level 1 it can never hurt you — a flying decoration
+you can, with a maxed sword, eventually kill.
+
+**Warps.** `obj_board_warptouch` fires on contact: camera shift = "warp" —
+10 frames of fade, the world rebased so (warpx,warpy) becomes the pane
+corner, Kris at (playerX,playerY), con 98 refires on arrival, snd
+board_escaped. `obj_board_warpentrance` has NO Step — Kris's own Step
+converts a just-started edge shift into a warp when he overlaps one: it is
+a doorway on the boundary. All targets live in per-instance creation code
+(gml_RoomCC_* in the dump — the instance field is PreCreateCode, not
+CreationCode, in this GM version).
+
+**The tree loop** (level 1). Five obj_board_swordroute_treeteleportroom
+regions; while global.flag[1006] < 4, stepping in warps you to the
+canonical screen (1280,1088) AT THE SAME SCREEN POSITION (`plx = x - 128`),
+four times, then the forest lets you through. The ghost helpers and the
+chest cinematic are not reproduced (labelled).
+
+**The boat** (level 2). Embark = the interact: Z while standing on a dock
+(obj_board_boat's user event 0 via scr_interact). Riding is Kris's own
+movement rules against obj_board_boatsolid — a third wall set. An engaged
+boat gets the same +2/frame nudge Kris does during shifts. Disembark: Z
+facing a dock one cell ahead; the boat parks beside it. The route to the
+sword sails UP THE WATERFALL column (the boatsolid map opens exactly
+there), into obj_board_b2sword_boatwarp: scr_quickwarp(3968,2112,
+4192,2240), boat destroyed, Kris on foot.
+
+**The cactus.** A hazard child (damage 1, always active — not gated on
+violence) that makes its own solid from its bbox inset 2px, hp 3 to the
+sword. TRAP FOUND HERE: the cactus solid lives in the solids list AND was
+translated by a second loop — double translation drifted the wall off the
+plant one screen per shift.
+
+**Candy.** Dropped by the kill roll (5%, +20 under 8 hp, +30 under 3, 0 at
+full, pity at 6 kills), blinks after 120 frames, gone at 150, heals +2 on
+touch after a 10-frame grace (snd_power).
+
+**The TV set.** obj_gameshow_swordroute: spr_gameshow_swordroutebg at
+(-10,-10) (origin 5,5, scale 2), the additive tvglow at (0,320) tinted
+`screencolor` at alpha 0.5, black below y 380. screencolor merges toward
+each screen's obj_board_screenColorChanger colour over 16 frames — the
+colour is the room instance's blend (ABGR in the room data). THE REAL HUD
+is the gameshow's event_user(0), not obj_board_healthbar (obj_ch3_gameshow
+never exists in sword rooms, so the (270,34) bar never instantiates —
+correcting the earlier claim): black strip 128..511 x 32..63, "HP" +
+a bar whose max width GROWS with sword level (110 + 30·(lv−1), hp scaled
+against an absolute max of 32), "LV n"/"MAX" + a 66px XP bar + one sword
+icon per level, and the ice key icon by flag 1055. All drawn in fnt_8bit.
+
+**Level flow.** Every manager opens with a heart-shaped squaretransition
+and a 60-frame screencolor fade from black — #FFD864 / #E2FF81 / #4DAFFF.
+Music: board_ocean at open; the sword pickup switches to board_sword_music
+(pitch 0.9 in level 2); level 2's first level-up drops back to the ocean,
+as does level 1 at swordlv 4. Endings: level 1 = reaching the Mantle tease
+(it flees upward; flag 1008); level 2 = the ice door, unlocked with the
+key, #5AAFFF fade (room_goto dungeon_2 in the game); level 3 = the exit
+trigger (fade, flag 1055 = 4, room_goto dungeon_3). The sim shows a card
+and offers the next level; the dungeons are out of scope.
+
+### Labelled approximations (also on the page)
+
+- The story set pieces are not reproduced: the b1store shop, the shadowtease
+  writer text, the tenna monologue/entrance, the heartisland and northern
+  lights rooms, the tree-loop ghost helpers, the chest cinematic.
+- The CRT filter (shd_crt with vignette/chromatic/glitch) is not applied.
+- The heart-shaped intro wipe is a plain fade.
+- The monster's chase is A* over the same grid, not mp_grid_path's exact
+  tie-breaks.
+- The boat embark radius is "nearest boat within 200px" rather than the
+  game's per-boat dock bookkeeping.
+- Susie and Ralsei do not follow in level 3 (obj_board_caterpillarchara).
+- Level endings show a card instead of entering the dungeons.
+
+## Still to do, if ever
+
+1. The CRT filter over the pane (shd_crt, WebGL — same pipeline thedevice
+   already runs for shd_crt2).
+2. The caterpillar followers in level 3.
+3. The set-piece dialogue (shopwriter/bw_make text boxes).
+4. The rank screen (out of the three-level scope; scr_get_rank_letter).
 
 ## Deliberately out of scope
 

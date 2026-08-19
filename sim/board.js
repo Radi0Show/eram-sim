@@ -1,282 +1,199 @@
-// THE BOARD ENGINE — the sword route's three levels.
+// THE BOARD ENGINE — the sword route's three levels, all of them.
 //
-// Chapter 3's board game, the one you play for a rank (`scr_get_rank_letter`:
-// Z C B A S T). The sword route hands you one level after each board, and
-// these are those three:
+// Chapter 3's board game, the one ranked Z C B A S T. The sword route hands
+// you one level after each board:
 //
-//   1  room_board_1_sword   6220x1920   desert, trees, enemy spawners
-//   2  room_board_2_sword   5184x4736   water, boats, docks
-//   3  room_board_3_sword   3968x3392   the approach, and the sword manager
+//   1  room_board_1_sword   6220x1920   desert: monsters, spear monsters,
+//                                       flowers, pond fish, one bluebird,
+//                                       cactus hazards, the tree loop
+//   2  room_board_2_sword   5184x4736   water: boats, docks, warp maze,
+//                                       fish that dash, the ice door
+//   3  room_board_3_sword   3968x3392   the approach: stanchions, no
+//                                       enemies, one exit trigger
 //
-// THE MECHANIC THIS IS BUILT ON, and the thing to understand before
-// changing anything: THE CAMERA NEVER MOVES. The screen is a fixed 384x256
-// window at (128,64) and Kris is clamped inside it (x 128..480, y 64..288 —
-// 384-32 and 256-32, because he is 32 wide). Walking off an edge does not
-// pan: obj_board_camera translates THE ENTIRE WORLD — the tile layers via
-// `layer_x`/`layer_y`, and every obj_board_parent instance, Kris included —
-// one whole screen over, 24px a frame horizontally and 16 vertically,
-// sixteen frames either way.
+// THE CAMERA NEVER MOVES. The screen is a fixed 384x256 window at (128,64);
+// walking off an edge translates THE WHOLE WORLD one pane over (24px/frame
+// horizontal, 16 vertical), with Kris — and an engaged boat — nudged +2px a
+// frame against the drift so they land on the opposite bound. Warps are the
+// same translation done all at once behind a 10-frame fade
+// (obj_board_camera's shift = "warp").
 //
-// AND KRIS GETS TWO PIXELS BACK each frame, against the drift. The camera
-// moves every instance by the full movespeed and then nudges KRIS ALONE by
-// 2 the other way, so over 16 frames he covers 352 of the 384 and lands on
-// the opposite bound (480 - 352 = 128) — walking in at the edge of the new
-// screen. Leave it out and he overshoots, re-trips the edge test, and the
-// screen oscillates forever. It is four lines and the transition depends on
-// them entirely.
+// LIFETIME: the moment a shift begins every enemy and projectile is
+// destroyed; the frame it lands (con 98) every living spawner inside the
+// player's bounds fires, the arriving screen's colour changer retints the
+// TV, and regions (water, falls, triggers) activate. Enemies are strictly
+// per-screen.
 //
-// Verified against room_board_preshadowmantle in the thedevice build before
-// being brought here; the numbers are all read out of obj_mainchara_board
-// and obj_board_camera, never tuned.
+// Everything numeric is read from the dump and cited where it lands;
+// approximations are labelled on the page, not just here.
 
-import { createEnemies } from './enemies.js';
+import { createEnemies, CONTACT_DAMAGE } from './enemies.js';
+import { loadAtlas } from './sprites.js';
+import { createAudio } from './audio.js';
+import { loadFont } from './text.js';
 
-const VIEW_W = 640, VIEW_H = 480;      // the game window
-const PANE_X = 128, PANE_Y = 64;       // where the board's screen sits in it
-const PANE_W = 384, PANE_H = 256;      // obj_board_camera's gamescreenWidth/Height
-const MS_PER_FRAME = 1000 / 30;        // GEN8 game speed
+const VIEW_W = 640, VIEW_H = 480;
+const PANE_X = 128, PANE_Y = 64, PANE_W = 384, PANE_H = 256;
+const MS_PER_FRAME = 1000 / 30;
 
 const WSPEED = 4;                      // obj_mainchara_board Create
-const KRIS_SIZE = 32;                  // 16x16 sprite at the instance's scale 2
-
-// obj_mainchara_board Step, lines 1-4. The pane inset by Kris's own size.
+const KRIS_SIZE = 32;
 const BOUND_L = 128, BOUND_R = 480, BOUND_U = 64, BOUND_D = 288;
-
-// obj_board_camera Step: horizontal shifts run at 24, vertical at 16 — both
-// land on exactly 16 frames for their axis.
 const SHIFT_H_SPEED = 24, SHIFT_V_SPEED = 16;
 
 const FACE_DOWN = 0, FACE_RIGHT = 1, FACE_UP = 2, FACE_LEFT = 3;
 const FACE_NAME = ['down', 'right', 'up', 'left'];
 
 /* ---------------- getting hit ----------------
-   obj_mainchara_board's Create, and the damage block in its Step. Kris opens
-   at myhealth 999 and the Step's very first health line clamps it to
-   maxhealth — that IS the initialisation, and it is why 12 is the number.
-
-   A hit costs 2 (the contact hitbox's own `damage`), so twelve health is six
-   hits — which the shadowmantle branch states out loud as
-   `numberofhitskriscantake = 6`. */
+   obj_mainchara_board's Create and the damage block in its Step. Kris opens
+   at myhealth 999; the Step's first health line clamps to maxhealth 12. A
+   contact hit costs 2 (the hitbox's damage), projectiles cost 1, cactus 1. */
 const MAXHEALTH = 12;
-const IFRAMES = 20;               // set on every hit
-const HURTTIMER = 5;              // frames of lockout after one
-const HITMOVE = 32;               // Create says 64; the hit overwrites it
-const HITMOVESPEED = 16;          // so knockback is exactly two frames of 16
+const IFRAMES = 20;
+const HURTTIMER = 5;
+const HITMOVE = 32;                    // Create's 64 is overwritten by the hit
+const HITMOVESPEED = 16;
 
 /* ---------------- the sword ----------------
-   obj_mainchara_board's Create and the swing block in its Step.
-
-   THE SWING IS EIGHT FRAMES. press_1 sets `swordbuffer = 8` and drops
-   `canfreemove`; the buffer counts down 7..0 and control returns at 0. The
-   hitbox is created at buffer 6 and RE-AIMED at buffer 4, and on frames
-   7/6/5/4/0 a direction press still redirects the swing — so you can turn
-   a swing after starting it, which is most of how the weapon feels.
-
-   THE HITBOX GEOMETRY is where the origins matter. The two sprites are
-   spr_board_swordhitbox_vert (11x25, origin 1,8) and _horiz (25x11, origin
-   8,1), drawn at scale ±2 — the negative flips the box across the origin,
-   which is how up and left reach backwards. Worked through, each swing
-   covers 50px from Kris's centre along its axis and 22px across, and the
-   down/up boxes sit a couple of pixels off-centre because the game offsets
-   them by +2 and +10. Those asymmetries are the game's, and are kept. */
+   Eight frames; hitbox at buffer 6, re-aimed at 4; a direction press on
+   7/6/5/4/0 turns the swing. Boxes from the two hitbox sprites' dims and
+   origins at scale +/-2, relative to Kris's corner. */
 const SWORDBUFFER = 8;
 const SWORD_BOXES = {
-  // facing: [x, y, w, h] relative to Kris's top-left corner
-  0: [0, 16, 22, 50],     // down
-  1: [16, 12, 50, 22],    // right
-  2: [8, -34, 22, 50],    // up
-  3: [-34, 12, 50, 22],   // left
+  0: [0, 16, 22, 50], 1: [16, 12, 50, 22], 2: [8, -34, 22, 50], 3: [-34, 12, 50, 22],
 };
-/** The strike sprites are bigger than Kris and hang off him by their
- *  origins: down (16x32, o 0,0), up (16x32, o 0,16), left (32x16, o 16,0),
- *  right (32x16, o 0,0) — all at scale 2. */
 const STRIKE_OFFSET = { 0: [0, 0], 1: [0, 0], 2: [0, -32], 3: [-32, 0] };
-/** image_index by swordbuffer, from the Step's ladder. */
 const STRIKE_FRAME = { 7: 0, 6: 0, 5: 1, 4: 1, 3: 1, 2: 2, 1: 0, 0: 0 };
 
-/* obj_board_healthbar: one bar for Kris in a sword room, at (270,34), and
-   the fill is a stretched white pixel 50 wide and 6 tall at (+14,+12). */
-const HEALTHBAR_X = 270, HEALTHBAR_Y = 34;
-const HEALTHBAR_COLOR = '#DBFC8F';
+/* The level-up table from the Step; xptolevel starts 3, or 10 in level 2. */
+const XP_TABLE = { 2: 24, 3: 15, 4: 14, 5: 68 };
 
-/* obj_board_death_event_sword. `red` is a GameMaker BGR literal, so 6609 is
-   0x0019D1 and reads back as rgb(209,25,0). It steps down twice and then to
-   black while Kris spins. */
+/* obj_board_death_event_sword's colour ladder (BGR literals decoded). */
 const DEATH_REDS = [
-  { t: 0,  css: 'rgb(209,25,0)' },   // red = 6609
-  { t: 40, css: 'rgb(167,27,0)' },   // red = 7079
-  { t: 50, css: 'rgb(121,20,0)' },   // red = 5241
-  { t: 60, css: 'rgb(0,0,0)' },      // red = 0
+  { t: 0, css: 'rgb(209,25,0)' }, { t: 40, css: 'rgb(167,27,0)' },
+  { t: 50, css: 'rgb(121,20,0)' }, { t: 60, css: 'rgb(0,0,0)' },
 ];
-const DEATH_END = 120;            // room_goto(room_board_sword_intro)
+const DEATH_END = 120;
 
-/** GameMaker's point_direction: degrees CCW from east, y inverted. */
+/* The per-level intro colour fades (each manager's con 1). */
+const INTRO_COLOR = { 1: '#FFD864', 2: '#E2FF81', 3: '#4DAFFF' };
+
 function pointDirection(x1, y1, x2, y2) {
   const d = Math.atan2(-(y2 - y1), x2 - x1) * 180 / Math.PI;
   return d < 0 ? d + 360 : d;
 }
 
-/** A sprite multiplied by a solid colour, the way image_blend does it.
- *  Multiply, then restore the original alpha so the margins stay clear. */
-const tintCache = new Map();
-function tinted(img, css) {
-  const key = `${img.src}|${css}`;
-  let c = tintCache.get(key);
-  if (c) return c;
-  c = document.createElement('canvas');
-  c.width = img.width; c.height = img.height;
-  const g = c.getContext('2d');
-  g.imageSmoothingEnabled = false;
-  g.drawImage(img, 0, 0);
-  g.globalCompositeOperation = 'multiply';
-  g.fillStyle = css;
-  g.fillRect(0, 0, c.width, c.height);
-  g.globalCompositeOperation = 'destination-in';
-  g.drawImage(img, 0, 0);
-  tintCache.set(key, c);
-  return c;
-}
-
-function loadImage(src) {
-  return new Promise((res, rej) => {
-    const i = new Image();
-    i.onload = () => res(i);
-    i.onerror = () => rej(new Error(`${src} missing`));
-    i.src = src;
-  });
-}
-
-/**
- * Run one level.
- *
- * @param canvas  the 640x480 frame
- * @param level   a level object from assets/levels/<n>.json
- * @param opts    base — where the shared art lives, relative to the page
- */
 export async function runBoard(canvas, level, opts = {}) {
   const base = opts.base ?? 'assets/';
-  const ctx = canvas.getContext('2d');
+  const g = canvas.getContext('2d');
   canvas.width = VIEW_W;
   canvas.height = VIEW_H;
-  ctx.imageSmoothingEnabled = false;
+  g.imageSmoothingEnabled = false;
 
   const room = level;
-  const [tileset, ...krisFrames] = await Promise.all([
-    loadImage(`${base}tileset.png`),
-    ...['down', 'right', 'up', 'left'].flatMap((d) =>
-      [0, 1].map((f) => loadImage(`${base}kris_${d}_${f}.png`))),
-  ]);
-  const monsterIdle = await Promise.all([0, 1].map((f) =>
-    loadImage(`${base}monster_outline_docile_${f}.png`).catch(() => null)));
-  const monsterAngry = await Promise.all([0, 1].map((f) =>
-    loadImage(`${base}monster_angery_outline_docile_${f}.png`).catch(() => null)));
-  const monsterHurt = (await Promise.all([0, 1].map((f) =>
-    loadImage(`${base}monster_hurt_${f}.png`).catch(() => null)))).filter(Boolean);
-  const enemySprites = {
-    idle: monsterIdle.filter(Boolean),
-    angry: monsterAngry.filter(Boolean),
-    hurt: monsterHurt,
-  };
-  // The bar's frame (spr_board_healthbar, 46x15, two frames — alive, dead).
-  const healthbarFrame = (await Promise.all([0, 1].map((f) =>
-    loadImage(`${base}healthbar_${f}.png`).catch(() => null)))).filter(Boolean);
-  // spr_board_kris_strike_*, three frames each.
-  const strikeSprite = {};
-  for (const d of ['down', 'right', 'up', 'left']) {
-    strikeSprite[d] = (await Promise.all([0, 1, 2].map((f) =>
-      loadImage(`${base}kris_strike_${d}_${f}.png`).catch(() => null)))).filter(Boolean);
-  }
-  const keySprite = await loadImage(`${base}key_0.png`).catch(() => null);
+  const S = await loadAtlas(base);
+  const font = await loadFont(base);
+  const audio = opts.audio ?? createAudio(base);
+  const snd = (n, o) => audio.play(n, o);
 
-  const krisSprite = {
-    down: [krisFrames[0], krisFrames[1]],
-    right: [krisFrames[2], krisFrames[3]],
-    up: [krisFrames[4], krisFrames[5]],
-    left: [krisFrames[6], krisFrames[7]],
-  };
-
-  /* ---------------- the world ----------------
-     obj_board_camera's Create:
-         moveX = 128 - roomStartingX - originX
-         moveY = 64  - roomStartingY - originY
-     and then it moves the layers AND every board instance by that. The
-     layers start at 0,0 here, so this room opens shifted (0, -256) — which
-     is what puts Kris's starting cell inside the screen. */
-  const moveX = PANE_X - room.roomStartingX;
-  const moveY = PANE_Y - room.roomStartingY;
-
-  const world = { x: moveX, y: moveY };   // the tile layer's origin
-  const solids = room.solids.map((s) => ({ x: s.x + moveX, y: s.y + moveY, w: s.w, h: s.h }));
-
-  /* THE ENEMIES. Their spawners live in world space like everything else,
-     so they are translated with the room and then tested against the
-     player's bounds — which is what the camera does at con 98. */
-  const spawners = (room.spawners ?? []).map((sp) => ({ ...sp, x: sp.x + moveX, y: sp.y + moveY }));
-  /* VIOLENCE — whether an enemy's hitbox is live at all.
-     obj_board_controller's Create is `violence = true`, except
-     `if (room == room_board_1_sword) violence = false`. Level 2's manager
-     then forces it false until Kris has the sword and true once he does.
-     The sword is not built, so the game's own answer for all three levels
-     right now is "off"; the host page exposes it because otherwise none of
-     the code below this line could ever run. */
-  const levelViolence = room.number !== 1;
-  let violence = opts.violence ?? (levelViolence && (opts.sword ?? false));
-  const foes = createEnemies(room, {
-    solids, violence,
-    swordlv: () => kris.swordlv,
-    onKill: () => { kris.xp += 1; },      // xp_given is 1 for all of these
+  const tileset = await new Promise((res, rej) => {
+    const i = new Image();
+    i.onload = () => res(i);
+    i.onerror = () => rej(new Error('tileset missing'));
+    i.src = `${base}${room.tileset.file}`;
   });
 
+  // Everything the three levels can draw, warmed up front — the board is
+  // small enough that "speed to play" wins over lazy loading.
+  await S.preload(Object.keys(S.manifest));
+
+  /* ---------------- the world ---------------- */
+  const moveX = PANE_X - room.roomStartingX;
+  const moveY = PANE_Y - room.roomStartingY;
+  const world = { x: moveX, y: moveY };
+
+  const shifted = (arr) => arr.map((o) => ({ ...o, x: o.x + moveX, y: o.y + moveY }));
+  const solids = shifted(room.solids);
+  const boatSolids = shifted(room.boatSolids ?? []);
+  const fishSolids = shifted(room.fishSolids ?? []);
+  const spawners = shifted(room.spawners ?? []);
+  const warps = shifted(room.warps ?? []);
+  const triggers = shifted(room.triggers ?? []);
+  const colorChangers = shifted(room.colorChangers ?? []);
+  const water = shifted(room.water ?? []);
+  const waterfalls = shifted(room.waterfalls ?? []);
+  const treeSpawners = shifted(room.treeSpawners ?? []);
+  const props = shifted(room.props ?? []);
+  const events = shifted(room.events ?? []);
+  const docks = shifted(room.docks ?? []);
+  const boats = shifted(room.boats ?? []).map((b) => ({
+    ...b, engaged: false, facing: FACE_DOWN, bob: 0, disembark: 0, myx: 0, myy: 0,
+  }));
+  const cactus = shifted(room.cactus ?? []).map((c) => ({
+    ...c, hp: 3, frame: Math.floor(Math.random() * 2),
+    solid: { x: c.x + 2, y: c.y + 2, w: 28, h: 28 },
+  }));
+  for (const c of cactus) solids.push(c.solid);
+  const candies = [];                 // dropped + placed heal pickups
+  const trees = [];                   // spawned by treeSpawners, per screen
+
+  const pickup = room.pickup
+    ? { x: room.pickup.x + moveX, y: room.pickup.y + moveY, taken: false }
+    : null;
+
+  /* ---------------- kris ---------------- */
   const kris = {
-    x: room.kris.x + moveX,
-    y: room.kris.y + moveY,
-    facing: FACE_DOWN,
-    imageIndex: 0,
-    walkbuffer: 0,
-    canfreemove: true,
-    nowx: 0, nowy: 0,
-    // The sword, from Create. `sword` is false in all three sword rooms —
-    // it is only true at Create for the dungeons and the mantle rooms — so
-    // in these levels you walk to the pickup and take it.
-    sword: opts.sword ?? false,
-    swordlv: 1,
-    xp: 0,
-    xptolevel: room.number === 2 ? 10 : 3,   // level 2 sets 10; default 3
-    swordbuffer: 0,
-    swordfacing: 0,
-    swordhitbox: null,
-    // The damage state, all of it from obj_mainchara_board's Create.
-    myhealth: 999,          // clamped to maxhealth on the first step
-    maxhealth: MAXHEALTH,
-    iframes: 0,
-    hurttimer: 0,
-    hitcon: 0,
-    hitmove: 0,
-    hitx: 0, hity: 0,
-    blend: 'white',         // image_blend, toggled red while iframes run
+    x: room.kris.x + moveX, y: room.kris.y + moveY,
+    facing: FACE_DOWN, imageIndex: 0, walkbuffer: 0,
+    canfreemove: true, nowx: 0, nowy: 0,
+    sword: opts.sword ?? false, swordlv: 1, xp: 0,
+    xptolevel: room.number === 2 ? 10 : 3,
+    swordbuffer: 0, swordfacing: 0, swordhitbox: null,
+    myhealth: 999, maxhealth: MAXHEALTH,
+    iframes: 0, hurttimer: 0, hitcon: 0, hitmove: 0, hitx: 0, hity: 0,
+    blend: 'white', monstersdefeated: 0,
+    boat: false,                       // riding
+    atdoorway: false, leftdoorway: false,
   };
 
-  /** `place_meeting(x, y, obj_board_solid)` — Kris's 32x32 box against them. */
+  /* VIOLENCE — obj_board_controller's Create: true, except false in
+     room_board_1_sword. Level 2's manager holds it false until Kris has
+     the sword. The enemies re-derive their own aggression on top. */
+  let violence = room.number !== 1;
+  if (room.number === 2) violence = false;
+
+  const foes = createEnemies(room, {
+    solids, fishSolids,
+    swordlv: () => kris.swordlv,
+    hasSword: () => kris.sword,
+    onKill: () => { kris.xp += 1; },
+    onCandy: (x, y) => candies.push({ x, y, t: 0, dropped: true }),
+    snd, violence,
+  });
+
   function meets(x, y) {
     for (const s of solids) {
       if (x < s.x + s.w && x + KRIS_SIZE > s.x && y < s.y + s.h && y + KRIS_SIZE > s.y) return true;
     }
     return false;
   }
+  const boatMeets = (x, y) => boatSolids.some((s) =>
+    x < s.x + s.w && x + KRIS_SIZE > s.x && y < s.y + s.h && y + KRIS_SIZE > s.y);
 
   /* ---------------- input ---------------- */
   const held = new Set();
   const KEYMAP = {
     arrowup: 'u', arrowdown: 'd', arrowleft: 'l', arrowright: 'r',
     w: 'u', s: 'd', a: 'l', d: 'r',
-    // press_1 — the game's confirm button, and the swing.
     z: '1', enter: '1', ' ': '1',
   };
-  let press1 = false;          // edge-triggered, like keyboard_check_pressed
+  let press1 = false;
   const onKey = (e) => {
     const k = KEYMAP[e.key.toLowerCase()];
+    if (e.key.toLowerCase() === 'm') { audio.muted = !audio.muted; }
     if (!k) return;
     e.preventDefault();
+    audio.unlock();
     if (k === '1' && !held.has('1')) press1 = true;
     held.add(k);
   };
@@ -287,22 +204,104 @@ export async function runBoard(canvas, level, opts = {}) {
   window.addEventListener('keydown', onKey);
   window.addEventListener('keyup', onKeyUp);
 
-  /* ---------------- the shift ---------------- */
+  /* ---------------- the TV set ---------------- */
+  // obj_gameshow_swordroute: screencolor with a 16-frame merge fade, the
+  // set art, and the additive glow below the screen.
+  const tv = {
+    color: '#000000', newColor: '#000000', change: 0, changeTime: 16,
+    drawui: false,
+  };
+  function retint(css, frames = 16) {
+    tv.newColor = css;
+    tv.change = frames;
+    tv.changeTime = frames;
+  }
+  function mergeColor(a, b, f) {
+    const pa = [1, 3, 5].map((i) => parseInt(a.length === 7 ? a.slice(i, i + 2) : 'ff', 16));
+    const A = a.startsWith('rgb') ? a.match(/\d+/g).map(Number) : pa;
+    const B = b.startsWith('rgb') ? b.match(/\d+/g).map(Number) : [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
+    return `rgb(${A.map((v, i) => Math.round(v + (B[i] - v) * f)).join(',')})`;
+  }
+
+  /* ---------------- shifts and warps ---------------- */
   let shift = 'none';
   let moving = 0;
-  let healthbarFlash = 0;   // the bar goes red for 2 frames on a hit
+  let warp = null;                     // {t, warpx, warpy, playerX, playerY}
+  let healthbarFlash = 0;
 
-  /** Translate EVERYTHING — the world origin, the walls, Kris, the enemies. */
   function translate(dx, dy) {
     world.x += dx; world.y += dy;
-    for (const s of solids) { s.x += dx; s.y += dy; }
-    for (const sp of spawners) { sp.x += dx; sp.y += dy; }
+    for (const arr of [solids, boatSolids, fishSolids, spawners, warps, triggers,
+      colorChangers, water, waterfalls, treeSpawners, props, events, docks, candies, trees]) {
+      for (const o of arr) { o.x += dx; o.y += dy; }
+    }
+    // The cactus body translates here; its solid is already IN `solids`
+    // and translates with them — touching it twice made the wall drift off
+    // the plant, one screen per shift.
+    for (const c of cactus) { c.x += dx; c.y += dy; }
+    for (const b of boats) { b.x += dx; b.y += dy; }
     if (pickup) { pickup.x += dx; pickup.y += dy; }
     foes.translate(dx, dy);
     kris.x += dx; kris.y += dy;
   }
 
+  /** Everything that happens the frame a screen becomes THE screen. */
+  function arrive() {
+    foes.spawnVisible(spawners);
+    // The colour changer standing on this screen retints the set (16
+    // frames, obj_board_screenColorChanger -> gameshow colorchange).
+    for (const c of colorChangers) {
+      if (c.x >= 128 && c.x <= 512 && c.y >= 64 && c.y <= 320) { retint(c.color); break; }
+    }
+    // Tree spawners expand into their grid of trees when their region
+    // touches the screen (the camera's event_user(7) + activation sweep).
+    for (const ts of treeSpawners) {
+      if (ts.made) continue;
+      const w = ts.cols * 32, h = ts.rows * 32;
+      if (ts.x < 512 && ts.x + w > 128 && ts.y < 320 && ts.y + h > 64) {
+        ts.made = true;
+        for (let i = 0; i < ts.cols; i++) {
+          for (let j = 0; j < ts.rows; j++) {
+            const t = { x: ts.x + i * 32, y: ts.y + j * 32, cold: ts.cold,
+                        solid: null };
+            trees.push(t);
+          }
+        }
+      }
+    }
+  }
+
+  function startWarp(w) {
+    // obj_board_warptouch -> camera shift = "warp": 10 frames of fade, the
+    // rebase, then con 98 on the way back in.
+    warp = { t: 0, ...w };
+    kris.canfreemove = false;
+    foes.clearScreen();
+    snd('snd_board_escaped');
+  }
+
+  function stepWarp() {
+    warp.t += warp.instawarp ? 10 : 1;
+    if (warp.t >= 10 && !warp.rebased) {
+      warp.rebased = true;
+      // The rebase: the target screen's corner (warpx,warpy in room
+      // coordinates) becomes the pane, Kris lands at playerX/playerY.
+      const dx = (PANE_X - warp.warpx) - world.x;
+      const dy = (PANE_Y - warp.warpy) - world.y;
+      translate(dx, dy);
+      kris.x = warp.playerX + world.x;
+      kris.y = warp.playerY + world.y;
+      if (typeof warp.facing === 'number') kris.facing = warp.facing;
+      arrive();
+    }
+    if (warp.t >= 25) {                // timer 15 after the rebase
+      warp = null;
+      kris.canfreemove = true;
+    }
+  }
+
   function stepShift() {
+    if (warp) { stepWarp(); return; }
     if (shift === 'none') return;
     const horizontal = shift === 'left' || shift === 'right';
     const speed = horizontal ? SHIFT_H_SPEED : SHIFT_V_SPEED;
@@ -310,44 +309,56 @@ export async function runBoard(canvas, level, opts = {}) {
     const dx = shift === 'right' ? -speed : shift === 'left' ? speed : 0;
     const dy = shift === 'down' ? -speed : shift === 'up' ? speed : 0;
     translate(dx, dy);
-
-    // AND THEN KRIS GETS TWO PIXELS BACK, every frame, against the drift.
-    //
-    // This is the line that makes the transition work, and it is easy to
-    // miss: obj_board_camera moves every board instance by the full
-    // movespeed and then nudges KRIS ALONE by 2 the other way. Over the 16
-    // frames of a horizontal shift he travels 352 instead of 384 — from one
-    // bound to exactly the other (480 - 352 = 128), so he walks in at the
-    // edge of the new screen. Without it he overshoots past the opposite
-    // bound, trips the edge test again, and the screen shifts back and
-    // forth forever.
-    if (shift === 'right') kris.x += 2;
-    if (shift === 'left') kris.x -= 2;
-    if (shift === 'down') kris.y += 2;
-    if (shift === 'up') kris.y -= 2;
-
+    // Kris — and an engaged boat — get two pixels back each frame, against
+    // the drift, landing on the opposite bound.
+    const nudge = { right: [2, 0], left: [-2, 0], down: [0, 2], up: [0, -2] }[shift];
+    kris.x += nudge[0]; kris.y += nudge[1];
+    const raft = boats.find((b) => b.engaged);
+    if (raft) { raft.x += nudge[0]; raft.y += nudge[1]; }
     moving += speed;
     if (moving >= total) {
-      // con 99: the world settles on whole pixels and control comes back.
       kris.x = Math.round(kris.x);
       kris.y = Math.round(kris.y);
       shift = 'none';
       moving = 0;
       kris.canfreemove = true;
-      // obj_board_camera con 98: every spawner standing on the new screen
-      // fires now, before control comes back.
-      foes.spawnVisible(spawners);
+      arrive();
     }
   }
 
-  /* ---------------- Kris ----------------
-     obj_mainchara_board's Step: read the four keys, set facing by the rules
-     that make a held direction win over the one you just released, then
-     resolve movement one axis at a time with a corner slip. */
+  function beginShift(dir) {
+    // A warpentrance on the boundary converts the shift into a warp — the
+    // check in Kris's Step right after the edge sets `shift`:
+    //   if (place_meeting(x, y, obj_board_warpentrance)) ... shift = "warp"
+    const w = warps.find((o) => o.kind === 'warpentrance'
+      && kris.x < o.x + o.w && kris.x + KRIS_SIZE > o.x
+      && kris.y < o.y + o.h && kris.y + KRIS_SIZE > o.y);
+    if (w && typeof w.warpx === 'number') {
+      foes.clearScreen();
+      warp = { t: 0, ...w };
+      kris.canfreemove = false;
+      if (w.playStairsSound) snd('snd_board_escaped');
+      return;
+    }
+    kris.canfreemove = false;
+    shift = dir;
+    foes.clearScreen();               // the camera's shift-start cleanup
+  }
+
+  /* ---------------- kris movement ---------------- */
   function stepKris() {
     kris.nowx = kris.x;
     kris.nowy = kris.y;
-    if (!kris.canfreemove) return;
+
+    // atdoorway / leftdoorway, from the Step's tail: standing on the
+    // boundary is "at the doorway"; the strict interior arms the enemies'
+    // player-on-screen checks.
+    if (shift === 'none' && !warp) {
+      if (kris.x < 129 || kris.x > 479 || kris.y < 65 || kris.y > 287) kris.atdoorway = true;
+      else { kris.leftdoorway = true; kris.atdoorway = false; }
+    }
+
+    if (!kris.canfreemove || kris.boat) return;
 
     const pr = held.has('r') ? 1 : 0, pl = held.has('l') ? 1 : 0;
     const pd = held.has('d') ? 1 : 0, pu = held.has('u') ? 1 : 0;
@@ -358,9 +369,6 @@ export async function runBoard(canvas, level, opts = {}) {
     if (pd) { py = WSPEED; pressdir = FACE_DOWN; }
     if (pu) { py = -WSPEED; pressdir = FACE_UP; }
 
-    // The facing rules, verbatim: while facing one way, the opposite key
-    // takes over immediately, and letting go of the current one hands
-    // facing to whatever is still held.
     const f = kris.facing;
     if (f === FACE_UP) {
       if (pd) kris.facing = FACE_DOWN;
@@ -378,39 +386,26 @@ export async function runBoard(canvas, level, opts = {}) {
 
     const x = kris.x, y = kris.y;
 
-    // X AXIS. Blocked? First try to slip up or down by g — this is what
-    // lets you round a corner without catching on it — then walk px back
-    // toward zero until it fits.
     if (px !== 0 && meets(x + px, y)) {
-      for (let g = WSPEED; g > 0; g -= 1) {
-        if (!pd && !meets(x + px, y - g)) { kris.y -= g; py = 0; break; }
-        if (!pu && !meets(x + px, y + g)) { kris.y += g; py = 0; break; }
+      for (let s = WSPEED; s > 0; s -= 1) {
+        if (!pd && !meets(x + px, y - s)) { kris.y -= s; py = 0; break; }
+        if (!pu && !meets(x + px, y + s)) { kris.y += s; py = 0; break; }
       }
-      let bkx = 0;
-      if (px > 0) {
-        for (let i = px; i >= 0; i -= 1) if (!meets(x + i, kris.y)) { px = i; bkx = 1; break; }
-      } else {
-        for (let i = px; i <= 0; i += 1) if (!meets(x + i, kris.y)) { px = i; bkx = 1; break; }
-      }
-      if (!bkx) px = 0;
+      let ok = 0;
+      if (px > 0) { for (let i = px; i >= 0; i -= 1) if (!meets(x + i, kris.y)) { px = i; ok = 1; break; } }
+      else { for (let i = px; i <= 0; i += 1) if (!meets(x + i, kris.y)) { px = i; ok = 1; break; } }
+      if (!ok) px = 0;
     }
-
-    // Y AXIS, the same shape.
     if (py !== 0 && meets(kris.x, y + py)) {
-      for (let g = WSPEED; g > 0; g -= 1) {
-        if (!pr && !meets(kris.x - g, y + py)) { kris.x -= g; px = 0; break; }
-        if (!pl && !meets(kris.x + g, y + py)) { kris.x += g; px = 0; break; }
+      for (let s = WSPEED; s > 0; s -= 1) {
+        if (!pr && !meets(kris.x - s, y + py)) { kris.x -= s; px = 0; break; }
+        if (!pl && !meets(kris.x + s, y + py)) { kris.x += s; px = 0; break; }
       }
-      let bky = 0;
-      if (py > 0) {
-        for (let i = py; i >= 0; i -= 1) if (!meets(kris.x, y + i)) { py = i; bky = 1; break; }
-      } else {
-        for (let i = py; i <= 0; i += 1) if (!meets(kris.x, y + i)) { py = i; bky = 1; break; }
-      }
-      if (!bky) py = 0;
+      let ok = 0;
+      if (py > 0) { for (let i = py; i >= 0; i -= 1) if (!meets(kris.x, y + i)) { py = i; ok = 1; break; } }
+      else { for (let i = py; i <= 0; i += 1) if (!meets(kris.x, y + i)) { py = i; ok = 1; break; } }
+      if (!ok) py = 0;
     }
-
-    // DIAGONAL: walk both components down together until the pair fits.
     if (px !== 0 && py !== 0 && meets(kris.x + px, kris.y + py)) {
       let i = px, j = py, ok = 0;
       while (j !== 0 || i !== 0) {
@@ -424,92 +419,408 @@ export async function runBoard(canvas, level, opts = {}) {
     kris.x += px;
     kris.y += py;
 
-    // THE EDGE. Clamp to the screen, and hand over to the camera only if
-    // there is somewhere to arrive: a solid one cell beyond the boundary
-    // means this edge is a wall, not a way out.
     if (kris.x > BOUND_R) {
       kris.x = BOUND_R;
-      if (!meets(kris.x + 32, kris.y)) { kris.facing = FACE_RIGHT; kris.canfreemove = false; shift = 'right'; }
+      if (!meets(kris.x + 32, kris.y)) { kris.facing = FACE_RIGHT; beginShift('right'); }
     }
     if (kris.x < BOUND_L) {
       kris.x = BOUND_L;
-      if (!meets(kris.x - 32, kris.y)) { kris.facing = FACE_LEFT; kris.canfreemove = false; shift = 'left'; }
+      if (!meets(kris.x - 32, kris.y)) { kris.facing = FACE_LEFT; beginShift('left'); }
     }
     if (kris.y > BOUND_D) {
       kris.y = BOUND_D;
-      if (!meets(kris.x, kris.y + 32)) { kris.canfreemove = false; shift = 'down'; }
+      if (!meets(kris.x, kris.y + 32)) beginShift('down');
     }
     if (kris.y < BOUND_U) {
       kris.y = BOUND_U;
-      if (!meets(kris.x, kris.y - 32)) { kris.facing = FACE_UP; kris.canfreemove = false; shift = 'up'; }
+      if (!meets(kris.x, kris.y - 32)) { kris.facing = FACE_UP; beginShift('up'); }
     }
   }
 
-  /* ---------------- getting hit ----------------
-     obj_mainchara_board's Step, in its own order: the health clamp and the
-     iframe tick come first, then the hazard test, then the knockback, then
-     the hurt timer. Movement (stepKris) happens above all of it, exactly as
-     it does in the Step. */
+  /* ---------------- the boat (level 2) ---------------- */
+  function stepBoats() {
+    for (const b of boats) {
+      if (b.gone) continue;
+      b.bob += 1;
+      const engaged = b.engaged;
 
-  let death = null;   // the death event, once myhealth reaches 0
+      if (!engaged && !kris.boat && kris.canfreemove && shift === 'none' && !warp) {
+        // obj_board_boat's user event 0 — scr_interact: PRESS Z while
+        // standing on a dock and the boat takes you (Kris jumps to it).
+        const onDock = docks.some((d) =>
+          kris.x < d.x + 32 && kris.x + KRIS_SIZE > d.x && kris.y < d.y + 32 && kris.y + KRIS_SIZE > d.y);
+        const near = Math.hypot(b.x - kris.x, b.y - kris.y) < 200;
+        if (onDock && near && press1) {
+          press1 = false;
+          b.engaged = true;
+          kris.boat = true;
+          kris.canfreemove = false;
+          b.embark = 10;
+          b.ex = kris.x; b.ey = kris.y;
+          snd('snd_board_lift');
+        }
+      }
+
+      if (b.embark > 0) {
+        b.embark -= 1;
+        const f = 1 - b.embark / 10;
+        kris.x = b.ex + (b.x - b.ex) * f;
+        kris.y = b.ey + (b.y - b.ey) * f - Math.sin(f * Math.PI) * 16;
+        if (b.embark === 0) { kris.canfreemove = true; }
+        continue;
+      }
+
+      if (engaged && b.disembark > 0) {
+        // Slide the boat to the dock, jump Kris out one cell beyond.
+        b.disembark -= 1;
+        b.x += Math.sign(b.myx - b.x) * Math.min(2, Math.abs(b.myx - b.x));
+        b.y += Math.sign(b.myy - b.y) * Math.min(2, Math.abs(b.myy - b.y));
+        kris.x = b.x; kris.y = b.y;
+        if (b.disembark === 0) {
+          kris.boat = false;
+          b.engaged = false;
+          kris.x = b.dockx; kris.y = b.docky;
+          kris.canfreemove = true;
+          snd('snd_board_lift', { pitch: 1.4 });
+        }
+        continue;
+      }
+
+      if (engaged && kris.canfreemove && shift === 'none' && !warp) {
+        // Drive: Kris's own movement rules against the boat solids.
+        const pr = held.has('r') ? 1 : 0, pl = held.has('l') ? 1 : 0;
+        const pd = held.has('d') ? 1 : 0, pu = held.has('u') ? 1 : 0;
+        let px = 0, py = 0, pressdir = -1;
+        if (pr) { px = WSPEED; pressdir = FACE_RIGHT; }
+        if (pl) { px = -WSPEED; pressdir = FACE_LEFT; }
+        if (pd) { py = WSPEED; pressdir = FACE_DOWN; }
+        if (pu) { py = -WSPEED; pressdir = FACE_UP; }
+        const f = b.facing;
+        if (f === FACE_UP && pd) b.facing = FACE_DOWN;
+        else if (f === FACE_DOWN && pu) b.facing = FACE_UP;
+        else if (f === FACE_LEFT && pr) b.facing = FACE_RIGHT;
+        else if (f === FACE_RIGHT && pl) b.facing = FACE_LEFT;
+        else if (pressdir !== -1) b.facing = pressdir;
+
+        if (px !== 0 && boatMeets(b.x + px, b.y)) {
+          for (let s = WSPEED; s > 0; s -= 1) {
+            if (!pd && !boatMeets(b.x + px, b.y - s)) { b.y -= s; py = 0; break; }
+            if (!pu && !boatMeets(b.x + px, b.y + s)) { b.y += s; py = 0; break; }
+          }
+          let ok = false;
+          const step = px > 0 ? -1 : 1;
+          for (let i = px; px > 0 ? i >= 0 : i <= 0; i += step) {
+            if (!boatMeets(b.x + i, b.y)) { px = i; ok = true; break; }
+          }
+          if (!ok) px = 0;
+        }
+        if (py !== 0 && boatMeets(b.x, b.y + py)) {
+          for (let s = WSPEED; s > 0; s -= 1) {
+            if (!pr && !boatMeets(b.x - s, b.y + py)) { b.x -= s; px = 0; break; }
+            if (!pl && !boatMeets(b.x + s, b.y + py)) { b.x += s; px = 0; break; }
+          }
+          let ok = false;
+          const step = py > 0 ? -1 : 1;
+          for (let i = py; py > 0 ? i >= 0 : i <= 0; i += step) {
+            if (!boatMeets(b.x, b.y + i)) { py = i; ok = true; break; }
+          }
+          if (!ok) py = 0;
+        }
+        if (px !== 0 && py !== 0 && boatMeets(b.x + px, b.y + py)) { px = 0; }
+        b.x += px; b.y += py;
+
+        // The edges, tested on the boat while riding.
+        if (b.x > BOUND_R) { b.x = BOUND_R; if (!boatMeets(b.x + 32, b.y)) { b.facing = FACE_RIGHT; beginShift('right'); } }
+        if (b.x < BOUND_L) { b.x = BOUND_L; if (!boatMeets(b.x - 32, b.y)) { b.facing = FACE_LEFT; beginShift('left'); } }
+        if (b.y > BOUND_D) { b.y = BOUND_D; if (!boatMeets(b.x, b.y + 32)) beginShift('down'); }
+        if (b.y < BOUND_U) { b.y = BOUND_U; if (!boatMeets(b.x, b.y - 32)) { b.facing = FACE_UP; beginShift('up'); } }
+
+        // Disembark: Z while facing a dock one cell ahead.
+        if (press1) {
+          const cx = b.facing === FACE_RIGHT ? 32 : b.facing === FACE_LEFT ? -32 : 0;
+          const cy = b.facing === FACE_DOWN ? 32 : b.facing === FACE_UP ? -32 : 0;
+          const d = docks.find((dk) =>
+            b.x + cx + 12 < dk.x + 32 && b.x + cx + 20 > dk.x
+            && b.y + cy + 12 < dk.y + 32 && b.y + cy + 20 > dk.y);
+          if (d) {
+            b.disembark = 16;
+            b.myx = d.x - cx; b.myy = d.y - cy;   // the boat parks beside
+            b.dockx = d.x; b.docky = d.y;
+            kris.canfreemove = false;
+            press1 = false;
+          }
+        }
+        kris.x = b.x; kris.y = b.y;
+        kris.facing = b.facing;
+      } else if (engaged) {
+        kris.x = b.x; kris.y = b.y;
+      }
+    }
+  }
+
+  /* ---------------- the sword ---------------- */
+  function stepSword() {
+    if (press1 && kris.sword && kris.swordbuffer <= 0 && kris.canfreemove
+      && shift === 'none' && !warp && !death && !outro && !kris.boat) {
+      kris.swordbuffer = SWORDBUFFER;
+      kris.swordfacing = kris.facing;
+      kris.canfreemove = false;
+      audio.swing();
+    }
+    if (kris.swordbuffer > 0) {
+      kris.swordbuffer -= 1;
+      const b = kris.swordbuffer;
+      if (b === 7 || b === 6 || b === 5 || b === 4 || b === 0) {
+        if (held.has('d')) kris.swordfacing = FACE_DOWN;
+        if (held.has('u')) kris.swordfacing = FACE_UP;
+        if (held.has('r')) kris.swordfacing = FACE_RIGHT;
+        if (held.has('l')) kris.swordfacing = FACE_LEFT;
+        if (b === 4 && kris.swordhitbox) {
+          kris.swordhitbox.facing = kris.swordfacing;
+          kris.swordhitbox.timer = 0;
+        }
+      }
+      kris.facing = kris.swordfacing;
+      if (b === 6) kris.swordhitbox = { facing: kris.facing, timer: 0 };
+      if (b === 0) kris.canfreemove = true;
+    }
+    if (kris.swordhitbox) {
+      const hb = kris.swordhitbox;
+      const [ox, oy, w, h] = SWORD_BOXES[hb.facing];
+      hb.box = { x: kris.x + ox, y: kris.y + oy, w, h };
+      chopCactus(hb.box);
+      hb.timer += 1;
+      if (hb.timer >= 5) kris.swordhitbox = null;
+    }
+    if (kris.xp >= kris.xptolevel) {
+      kris.xp = 0;
+      kris.swordlv = Math.min(5, kris.swordlv + 1);
+      kris.xptolevel = XP_TABLE[kris.swordlv] ?? 68;
+      snd('snd_board_ominous');
+      // Level 2's manager: the first level-up swaps the sword music back
+      // to the ocean.
+      if (room.number === 2 && kris.swordlv === 2) audio.music('board_ocean');
+      // Level 1's manager: swordlv 4 goes ominous-quiet into the ocean.
+      if (room.number === 1 && kris.swordlv === 4) audio.music('board_ocean');
+    }
+  }
+
+  function chopCactus(box) {
+    for (let i = cactus.length - 1; i >= 0; i--) {
+      const c = cactus[i];
+      if (c.hitwait > 0) continue;
+      if (box.x < c.x + 32 && box.x + box.w > c.x && box.y < c.y + 32 && box.y + box.h > c.y) {
+        c.hp -= 1;
+        c.hitwait = 10;
+        snd('snd_board_damage');
+        if (c.hp <= 0) {
+          const si = solids.indexOf(c.solid);
+          if (si >= 0) solids.splice(si, 1);
+          cactus.splice(i, 1);
+        }
+      }
+    }
+  }
+
+  /* ---------------- the pickup and candy ---------------- */
+  function stepPickup() {
+    if (pickup && !pickup.taken && !kris.sword) {
+      const near = kris.x < pickup.x + 32 && kris.x + KRIS_SIZE > pickup.x - 8
+        && kris.y < pickup.y + 32 && kris.y + KRIS_SIZE > pickup.y - 8;
+      if (near && press1) {
+        pickup.taken = true;
+        kris.sword = true;
+        // The pickup's Step: level music starts with the sword.
+        if (room.number === 1) audio.music('board_sword_music');
+        if (room.number === 2) audio.music('board_sword_music', { pitch: 0.9 });
+        if (room.number === 3) audio.music('board_ocean');
+      }
+    }
+    for (let i = candies.length - 1; i >= 0; i--) {
+      const c = candies[i];
+      c.t += 1;
+      if (c.dropped && c.t > 150) { candies.splice(i, 1); continue; }
+      if (c.t < 10) continue;              // the 10-frame grace
+      const over = kris.x < c.x + 32 && kris.x + KRIS_SIZE > c.x
+        && kris.y < c.y + 32 && kris.y + KRIS_SIZE > c.y;
+      const sworded = kris.swordhitbox && kris.swordhitbox.box
+        && kris.swordhitbox.box.x < c.x + 32 && kris.swordhitbox.box.x + kris.swordhitbox.box.w > c.x
+        && kris.swordhitbox.box.y < c.y + 32 && kris.swordhitbox.box.y + kris.swordhitbox.box.h > c.y;
+      if ((over || sworded) && kris.myhealth >= 1) {
+        candies.splice(i, 1);
+        kris.myhealth += 2;
+        snd('snd_power');
+      }
+    }
+  }
+
+  /* ---------------- warps, triggers and endings ---------------- */
+  let outro = null;                    // {kind, t}
+  let treeLoops = 0;                   // global.flag[1006]
+
+  function stepWarps() {
+    if (!kris.canfreemove || shift !== 'none' || warp || death || outro) return;
+    for (const w of warps) {
+      if (w.kind !== 'warptouch') continue;   // entrances fire at the edge
+      if (kris.x < w.x + w.w && kris.x + KRIS_SIZE > w.x
+        && kris.y < w.y + w.h && kris.y + KRIS_SIZE > w.y) {
+        if (typeof w.warpx === 'number') startWarp(w);
+        return;
+      }
+    }
+    for (const e of events) {
+      const ew = 32 * (e.sx || 1), eh = 32 * (e.sy || 1);
+      const over = kris.x < e.x + ew && kris.x + KRIS_SIZE > e.x
+        && kris.y < e.y + eh && kris.y + KRIS_SIZE > e.y;
+      if (!over) continue;
+      if (e.obj === 'b1_shadowteaseentrance') {
+        // scr_quickwarp(3200, 64, 3376, 256)
+        startWarp({ warpx: 3200, warpy: 64, playerX: 3376, playerY: 256 });
+        return;
+      }
+      if (e.obj === 'b1swordentrance') {
+        startWarp({ warpx: 2048, warpy: 320, playerX: 2224, playerY: 512, facing: FACE_UP });
+        return;
+      }
+      if (e.obj === 'swordroute_treeteleportroom' && treeLoops < 4) {
+        // The forest loop, from the teleportroom's Step:
+        //   var plx = obj_mainchara_board.x - 128;   // SCREEN position
+        //   scr_board_instawarp(1280, 1088, 1280 + plx, 1088 + ply, ...)
+        // — you land on the canonical screen at the same screen position,
+        // four times (global.flag[1006]), and then the forest lets you
+        // through.
+        treeLoops += 1;
+        const plx = kris.x - PANE_X;
+        const ply = kris.y - PANE_Y;
+        startWarp({ warpx: 1280, warpy: 1088, playerX: 1280 + plx, playerY: 1088 + ply, instawarp: true });
+        return;
+      }
+      if (e.obj === 'b2sword_boatwarp' && kris.boat) {
+        // obj_board_b2sword_boatwarp: the boat sails into it, the boat is
+        // destroyed, and Kris lands on foot at (4192,2240) —
+        // scr_quickwarp(3968, 2112, 4192, 2240).
+        const b = boats.find((x) => x.engaged);
+        if (b) { b.engaged = false; b.gone = true; }
+        kris.boat = false;
+        snd('snd_link_secret_bad');
+        startWarp({ warpx: 3968, warpy: 2112, playerX: 4192, playerY: 2240, facing: FACE_DOWN });
+        return;
+      }
+
+      if (e.obj === '1_sword_shadowtease' && !outro) {
+        // Level 1's finale: the Mantle flees upward and the level is done.
+        beginOutro('shadowtease');
+        return;
+      }
+    }
+    // The ice door — an interactable: Z within reach, and the ice key
+    // (carried since level 1) unlocks it. Its own sequence fades the set
+    // colour #5AAFFF down to black and leaves for the dungeon.
+    if (press1 && room.number === 2 && !outro) {
+      const door = events.find((e) => e.obj === 'b2s_icedoor');
+      if (door) {
+        const bx = door.x, by = door.y, bw = 96, bh = 62;
+        const near = kris.x < bx + bw + 40 && kris.x + KRIS_SIZE > bx - 40
+          && kris.y < by + bh + 40 && kris.y + KRIS_SIZE > by - 40;
+        if (near) {
+          press1 = false;
+          retint('#5AAFFF', 8);
+          beginOutro('icedoor');
+          return;
+        }
+      }
+    }
+    for (const t of triggers) {
+      const over = kris.x < t.x + t.w && kris.x + KRIS_SIZE > t.x
+        && kris.y < t.y + t.h && kris.y + KRIS_SIZE > t.y;
+      if (!over || t.fired) continue;
+      t.fired = true;
+      if (room.number === 3 && !t.extflag) {
+        beginOutro('escape');           // b3s con 999: fade and leave
+        return;
+      }
+    }
+  }
+
+  function beginOutro(kind) {
+    outro = { kind, t: 0 };
+    kris.canfreemove = false;
+    if (kind === 'escape') { snd('snd_board_escaped'); audio.fadeMusic(1.6); }
+    if (kind === 'shadowtease') { snd('snd_board_mantle_move'); audio.fadeMusic(1.6); }
+    if (kind === 'icedoor') { audio.fadeMusic(1.6); }
+  }
+
+  function stepOutro() {
+    outro.t += 1;
+    if (outro.t >= 90) {
+      outro.done = true;
+      if (opts.onComplete) opts.onComplete(room.number);
+    }
+  }
+
+  /* ---------------- damage ---------------- */
+  let death = null;
+
+  function cactusTouch() {
+    if (!kris.canfreemove && !kris.boat) return null;
+    for (const c of cactus) {
+      if (kris.x < c.x + 32 && kris.x + KRIS_SIZE > c.x
+        && kris.y < c.y + 32 && kris.y + KRIS_SIZE > c.y) {
+        return { damage: 1, px: c.x, py: c.y };
+      }
+    }
+    return null;
+  }
 
   function stepDamage() {
-    // `if (myhealth > maxhealth) myhealth = maxhealth;` — the line that
-    // turns Create's 999 into a full bar on frame one.
     if (kris.myhealth > kris.maxhealth) kris.myhealth = kris.maxhealth;
-    // `if (iframes > -5) iframes--;`
     if (kris.iframes > -5) kris.iframes -= 1;
 
-    // The gate. Without a sword, a boat or the player camera the game's
-    // long condition reduces to canfreemove — so no hit lands mid-shift or
-    // mid-recoil, which is what makes a single touch cost exactly one hit.
-    if (kris.canfreemove && kris.iframes <= 0 && kris.myhealth > 0) {
-      const hazard = foes.touching(kris);
+    const gate = (kris.canfreemove || (!kris.canfreemove && kris.swordbuffer > 0)
+      || (!kris.canfreemove && kris.boat))
+      && kris.iframes <= 0 && kris.myhealth > 0 && !death && !outro;
+    if (gate) {
+      const hazard = foes.touching(kris) ?? cactusTouch();
       if (hazard) {
         kris.iframes = IFRAMES;
-        kris.blend = 'red';                    // image_blend = c_red
-        kris.myhealth -= hazard.damage;        // 2
-        healthbarFlash = 2;                    // scr_delay_var("mycolor", …, 2)
+        kris.blend = 'red';
+        kris.myhealth -= hazard.damage ?? CONTACT_DAMAGE;
+        healthbarFlash = 2;
+        snd('snd_board_playerhurt');
+        snd('snd_hurt1');
         foes.stun(kris);
 
         kris.hurttimer = HURTTIMER;
-        kris.canfreemove = false;
+        if (!kris.boat) kris.canfreemove = false;
         kris.hitmove = HITMOVE;
         kris.hitcon = 1;
         kris.hitx = 0;
         kris.hity = 0;
-
-        // AWAY FROM WHERE THE HAZARD WAS, not where it is: the game takes
-        // the direction to `hazard.xprevious, hazard.yprevious`. Each
-        // quadrant tries its own axis first and falls back to sliding along
-        // the wall if a solid is in the way.
-        const dir = pointDirection(kris.x, kris.y, hazard.px, hazard.py);
+        const dir = pointDirection(kris.x, kris.y, hazard.px ?? hazard.x, hazard.py ?? hazard.y);
         const free = (dx, dy) => !meets(kris.x + dx, kris.y + dy);
-        if (dir >= 135 && dir < 225) {            // hazard to the left
+        if (dir >= 135 && dir < 225) {
           if (free(16, 0)) kris.hitx += HITMOVESPEED;
-          else if (hazard.py > kris.y && free(0, -16)) kris.hity -= HITMOVESPEED;
+          else if ((hazard.py ?? 0) > kris.y && free(0, -16)) kris.hity -= HITMOVESPEED;
           else if (free(0, 16)) kris.hity += HITMOVESPEED;
         }
-        if (dir >= 315 || dir < 45) {             // to the right
+        if (dir >= 315 || dir < 45) {
           if (free(-16, 0)) kris.hitx -= HITMOVESPEED;
-          else if (hazard.py > kris.y && free(0, -16)) kris.hity -= HITMOVESPEED;
+          else if ((hazard.py ?? 0) > kris.y && free(0, -16)) kris.hity -= HITMOVESPEED;
           else if (free(0, 16)) kris.hity += HITMOVESPEED;
         }
-        if (dir >= 45 && dir < 135) {             // above (y grows downward)
+        if (dir >= 45 && dir < 135) {
           if (free(0, 16)) kris.hity += HITMOVESPEED;
-          else if (hazard.px < kris.x && free(-16, 0)) kris.hitx -= HITMOVESPEED;
+          else if ((hazard.px ?? 0) < kris.x && free(-16, 0)) kris.hitx -= HITMOVESPEED;
           else if (free(16, 0)) kris.hitx += HITMOVESPEED;
         }
-        if (dir >= 225 && dir < 315) {            // below
+        if (dir >= 225 && dir < 315) {
           if (free(0, -16)) kris.hity -= HITMOVESPEED;
-          else if (hazard.px < kris.x && free(-16, 0)) kris.hitx -= HITMOVESPEED;
+          else if ((hazard.px ?? 0) < kris.x && free(-16, 0)) kris.hitx -= HITMOVESPEED;
           else if (free(16, 0)) kris.hitx += HITMOVESPEED;
         }
       }
     }
 
-    // THE RECOIL. hitmove 32 at hitmovespeed 16 is two frames, and the
-    // third falls through to the else — which is where death is decided.
     if (kris.hitcon === 1) {
       if (kris.hitmove > 0) {
         kris.hitmove -= HITMOVESPEED;
@@ -529,9 +840,6 @@ export async function runBoard(canvas, level, opts = {}) {
       }
     }
 
-    // `if (hurttimer == 1) canfreemove = 1;` then the decrement — and the
-    // clamp back inside the screen, so a knockback can never push Kris over
-    // an edge and trip the camera.
     if (kris.hurttimer === 1) kris.canfreemove = true;
     if (kris.hurttimer > 0) {
       kris.hurttimer -= 1;
@@ -539,111 +847,48 @@ export async function runBoard(canvas, level, opts = {}) {
       kris.y = Math.min(BOUND_D, Math.max(BOUND_U, kris.y));
     }
 
-    // The flash, from the Draw: every second frame the blend flips between
-    // white and red, so it reads as red-two-frames, white-two-frames.
     if (kris.iframes > 0) {
       if (kris.iframes % 2 === 0) kris.blend = kris.blend === 'white' ? 'red' : 'white';
     } else {
       kris.blend = 'white';
     }
+    for (const c of cactus) if (c.hitwait > 0) c.hitwait -= 1;
   }
 
-  /* ---------------- the swing ----------------
-     The Step's sword block, in order. */
-  function stepSword() {
-    // press_1 && sword && swordbuffer <= 0 && canfreemove && camera idle
-    if (press1 && kris.sword && kris.swordbuffer <= 0 && kris.canfreemove
-        && shift === 'none' && !death) {
-      kris.swordbuffer = SWORDBUFFER;
-      kris.swordfacing = kris.facing;
-      kris.canfreemove = false;
-      // snd_play(choose(snd_board_sword1, snd_board_sword2, snd_board_sword3))
-    }
-
-    if (kris.swordbuffer > 0) {
-      kris.swordbuffer -= 1;
-      const b = kris.swordbuffer;
-
-      // Redirect: on 7/6/5/4 and 0 a held direction re-aims the swing.
-      if (b === 7 || b === 6 || b === 5 || b === 4 || b === 0) {
-        if (held.has('d')) kris.swordfacing = FACE_DOWN;
-        if (held.has('u')) kris.swordfacing = FACE_UP;
-        if (held.has('r')) kris.swordfacing = FACE_RIGHT;
-        if (held.has('l')) kris.swordfacing = FACE_LEFT;
-        // At 4 the live hitbox is re-aimed and its timer restarts.
-        if (b === 4 && kris.swordhitbox) {
-          kris.swordhitbox.facing = kris.swordfacing;
-          kris.swordhitbox.timer = 0;
-        }
-      }
-      kris.facing = kris.swordfacing;
-
-      // At 6 the old hitbox is destroyed and a new one made at Kris.
-      if (b === 6) {
-        kris.swordhitbox = { facing: kris.facing, timer: 0, lv: kris.swordlv };
-      }
-      if (b === 0) kris.canfreemove = true;
-    }
-
-    // The hitbox itself: positioned from its facing, and destroyed at
-    // timer 5.
-    if (kris.swordhitbox) {
-      const hb = kris.swordhitbox;
-      const [ox, oy, w, h] = SWORD_BOXES[hb.facing];
-      const box = { x: kris.x + ox, y: kris.y + oy, w, h };
-      hb.box = box;
-      foes.swordHit(box, hb.facing, kris.swordlv);
-      hb.timer += 1;
-      if (hb.timer >= 5) kris.swordhitbox = null;
-    }
-
-    // The level-up, from the end of the Step.
-    if (kris.xp >= kris.xptolevel) {
-      kris.xp = 0;
-      kris.swordlv = Math.min(5, kris.swordlv + 1);
-      // snd_board_ominous
-      kris.xptolevel = { 2: 24, 3: 15, 4: 14, 5: 68 }[kris.swordlv] ?? 68;
-    }
-  }
-
-  /* The sword pickup — obj_board_pickup, one per level, at the position the
-     room places it. The game plays a whole cutscene here (the camera, the
-     music starting, Kris holding it overhead); this takes the sword and
-     starts the level's music-less equivalent, and says so on the page. */
-  const pickup = room.pickup
-    ? { x: room.pickup.x + moveX, y: room.pickup.y + moveY, taken: false }
-    : null;
-
-  function stepPickup() {
-    if (!pickup || pickup.taken || kris.sword) return;
-    // obj_board_interactable: you have to be on it and press the button.
-    const near = kris.x < pickup.x + 32 && kris.x + KRIS_SIZE > pickup.x - 8
-              && kris.y < pickup.y + 32 && kris.y + KRIS_SIZE > pickup.y - 8;
-    if (near && press1) {
-      pickup.taken = true;
-      kris.sword = true;
-    }
-  }
-
-  /* obj_board_death_event_sword. Its Step is `exit` — the whole sequence
-     lives in the Draw, on a frame counter. */
   function startDeath() {
     death = { timer: 0, facing: FACE_DOWN, css: DEATH_REDS[0].css };
-    foes.enemies.length = 0;         // `with (obj_board_enemy_parent) instance_destroy()`
+    foes.clearScreen();
+    audio.stopMusic();
+    snd('snd_fall');
   }
 
   function stepDeath() {
     death.timer += 1;
     const t = death.timer;
-    // `if (timer < 48) if ((timer % 4) == 0) facing--;` — three full turns.
     if (t < 48 && t % 4 === 0) death.facing = (death.facing + 3) % 4;
     for (const r of DEATH_REDS) if (t >= r.t) death.css = r.css;
   }
 
-  /* The game ends the sequence with `room_goto(room_board_sword_intro)`,
-     which is a room this sim does not have. The level restarts instead —
-     the world slides back to its opening offset, the spawners re-arm, and
-     Kris starts over on full health. Labelled on the page. */
+  /* ---------------- the intro ---------------- */
+  // Each manager: screencolor fades black -> the level's colour over 60
+  // frames behind a heart-shaped wipe (obj_board_squaretransition,
+  // special = "heart"). The wipe is approximated as an opening heart mask
+  // and labelled on the page.
+  let intro = { t: 0 };
+  retint('#000000', 1);
+  tv.color = '#000000';
+
+  function stepIntro() {
+    intro.t += 1;
+    if (intro.t === 1) retint(INTRO_COLOR[room.number], 60);
+    if (intro.t >= 75) {
+      intro = null;
+      tv.drawui = true;
+      audio.music('board_ocean');
+    }
+  }
+
+  /* ---------------- restart ---------------- */
   function restart() {
     translate(moveX - world.x, moveY - world.y);
     kris.x = room.kris.x + moveX;
@@ -653,29 +898,33 @@ export async function runBoard(canvas, level, opts = {}) {
     kris.walkbuffer = 0;
     kris.canfreemove = true;
     kris.myhealth = MAXHEALTH;
-    kris.iframes = 0;
-    kris.hurttimer = 0;
-    kris.hitcon = 0;
-    kris.hitmove = 0;
+    kris.iframes = 0; kris.hurttimer = 0; kris.hitcon = 0; kris.hitmove = 0;
     kris.hitx = 0; kris.hity = 0;
     kris.blend = 'white';
-    kris.swordbuffer = 0;
-    kris.swordhitbox = null;
-    kris.xp = 0;
-    kris.swordlv = 1;
+    kris.swordbuffer = 0; kris.swordhitbox = null;
+    kris.xp = 0; kris.swordlv = 1;
     kris.xptolevel = room.number === 2 ? 10 : 3;
     kris.sword = opts.sword ?? false;
-    if (pickup) { pickup.taken = false; }
-    shift = 'none';
-    moving = 0;
+    kris.boat = false;
+    kris.atdoorway = false; kris.leftdoorway = false;
+    kris.monstersdefeated = 0;
+    if (pickup) pickup.taken = false;
+    for (const b of boats) { b.engaged = false; b.embark = 0; b.disembark = 0; b.gone = false; }
+    for (const t of triggers) t.fired = false;
+    candies.length = 0;
+    trees.length = 0;
+    for (const ts of treeSpawners) ts.made = false;
+    treeLoops = 0;
+    shift = 'none'; moving = 0; warp = null;
     healthbarFlash = 0;
-    death = null;
+    death = null; outro = null;
     foes.reset();
-    foes.spawnVisible(spawners);
+    intro = { t: 0 };
+    tv.color = '#000000'; tv.drawui = false;
+    arrive();
     if (opts.onRestart) opts.onRestart();
   }
 
-  /** The walk cycle: two frames, and only ACTUAL movement drives it. */
   function stepAnim() {
     if (kris.x !== kris.nowx || kris.y !== kris.nowy) kris.walkbuffer = 6;
     if (kris.walkbuffer > 3) kris.imageIndex += 0.125;
@@ -685,110 +934,257 @@ export async function runBoard(canvas, level, opts = {}) {
 
   /* ---------------- drawing ---------------- */
   const { tileW, tileH, cols, border } = room.tileset;
+  let animClock = 0;
 
   function drawTiles() {
-    // Only the cells the screen can see — the grid is 77x30 and all but a
-    // pane of it is off-screen at any moment.
     const x0 = Math.floor((PANE_X - world.x) / tileW);
     const y0 = Math.floor((PANE_Y - world.y) / tileH);
     const x1 = Math.ceil((PANE_X + PANE_W - world.x) / tileW);
     const y1 = Math.ceil((PANE_Y + PANE_H - world.y) / tileH);
     for (let ty = Math.max(0, y0); ty < Math.min(room.tilesY, y1); ty++) {
-      const row = room.grid[ty];
-      if (!row) continue;
+      const rowT = room.grid[ty];
+      if (!rowT) continue;
       for (let tx = Math.max(0, x0); tx < Math.min(room.tilesX, x1); tx++) {
-        // GameMaker packs flip/rotate flags into the high bits of the id.
-        const id = row[tx] & 0x7ffff;
+        const id = rowT[tx] & 0x7ffff;
         if (!id) continue;
         const sx = (id % cols) * (tileW + border * 2) + border;
         const sy = Math.floor(id / cols) * (tileH + border * 2) + border;
-        ctx.drawImage(tileset, sx, sy, tileW, tileH,
+        g.drawImage(tileset, sx, sy, tileW, tileH,
           world.x + tx * tileW, world.y + ty * tileH, tileW, tileH);
       }
     }
   }
 
-  function draw() {
-    ctx.fillStyle = '#000';
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
+  const onScreen = (x, y, w = 32, h = 32) =>
+    x < PANE_X + PANE_W + 64 && x + w > PANE_X - 64 && y < PANE_Y + PANE_H + 64 && y + h > PANE_Y - 64;
 
-    ctx.save();
-    ctx.beginPath();
-    ctx.rect(PANE_X, PANE_Y, PANE_W, PANE_H);
-    ctx.clip();
+  function drawSprite(name, index, x, y, { flipX = false, tint = null, alpha = 1 } = {}) {
+    const meta = S.meta(name);
+    if (!meta) return;
+    let img = S.frame(name, Math.floor(index) % meta.frames);
+    if (!img) return;
+    if (tint) img = S.tinted(img, tint);
+    g.save();
+    if (alpha !== 1) g.globalAlpha = alpha;
+    if (flipX) {
+      g.translate(Math.round(x) + img.width * 2, Math.round(y));
+      g.scale(-1, 1);
+      g.drawImage(img, -meta.ox * 2, -meta.oy * 2, img.width * 2, img.height * 2);
+    } else {
+      g.drawImage(img, Math.round(x) - meta.ox * 2, Math.round(y) - meta.oy * 2,
+        img.width * 2, img.height * 2);
+    }
+    g.restore();
+  }
 
-    ctx.fillStyle = room.bgColor;
-    ctx.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
+  function drawWorld() {
+    g.fillStyle = room.bgColor;
+    g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
     drawTiles();
 
-    // The sword, waiting to be picked up.
-    if (pickup && !pickup.taken && !kris.sword) {
-      if (keySprite) {
-        ctx.drawImage(keySprite, Math.round(pickup.x), Math.round(pickup.y),
-          keySprite.width * 2, keySprite.height * 2);
-      } else {
-        ctx.fillStyle = '#ffffff';
-        ctx.fillRect(Math.round(pickup.x) + 12, Math.round(pickup.y) + 4, 8, 26);
+    // Water regions (animated 32px cells), then falls, then floor props.
+    for (const w of water) {
+      if (w.type === 'shallow') {
+        for (let i = 0; i < w.cols; i++) {
+          for (let j = 0; j < w.rows; j++) {
+            if (onScreen(w.x + i * 32, w.y + j * 32)) {
+              drawSprite('spr_board_shallowwater', animClock * 0.125, w.x + i * 32, w.y + j * 32);
+            }
+          }
+        }
+      } else if (onScreen(w.x, w.y, 128, 128)) {
+        // The ponds draw their own water then a border sprite.
+        const dims = { oasis_sword: [4, 2], smallpond_sword: [4, 2], lancermoat_sword: [7, 1], b1powerpond: [2, 1] };
+        const [cw, ch] = dims[w.type] ?? [2, 1];
+        for (let i = 0; i < cw; i++) {
+          for (let j = 0; j < ch; j++) {
+            drawSprite('spr_board_shallowwater', animClock * 0.125, w.x + i * 32, w.y + j * 32);
+          }
+        }
+        if (w.sprite && w.type !== 'b1powerpond') drawSprite(w.sprite, 0, w.x, w.y);
       }
     }
-
-    foes.draw(ctx, enemySprites);
-
-    // Mid-swing Kris uses the strike sprites, which are twice his size on
-    // the swing's axis and hang off him by their origins.
-    let frame, dx = 0, dy = 0, dw = KRIS_SIZE, dh = KRIS_SIZE;
-    if (kris.swordbuffer > 0 && strikeSprite[FACE_NAME[kris.facing]].length) {
-      const set = strikeSprite[FACE_NAME[kris.facing]];
-      frame = set[Math.min(set.length - 1, STRIKE_FRAME[kris.swordbuffer] ?? 0)];
-      [dx, dy] = STRIKE_OFFSET[kris.facing];
-      dw = frame.width * 2; dh = frame.height * 2;
-    } else {
-      const frames = krisSprite[FACE_NAME[kris.facing]];
-      frame = frames[Math.floor(kris.imageIndex) % frames.length];
+    for (const wf of waterfalls) {
+      for (let i = 0; i < wf.cols; i++) {
+        for (let j = 0; j < wf.rows; j++) {
+          if (onScreen(wf.x + i * 32, wf.y + j * 32)) {
+            drawSprite('spr_board_waterfall', animClock * 0.125, wf.x + i * 32, wf.y + j * 32);
+          }
+        }
+      }
     }
-    // image_blend: white is the sprite untouched, red is the hit flash.
-    const art = kris.blend === 'red' ? tinted(frame, '#ff0000') : frame;
-    ctx.drawImage(art, Math.round(kris.x) + dx, Math.round(kris.y) + dy, dw, dh);
+    for (const p of props) {
+      if (onScreen(p.x, p.y)) drawSprite(p.sprite, p.imageIndex, p.x, p.y, { tint: p.color ?? null });
+    }
+    for (const e of events) {
+      // The visible set pieces; markers (spr_board_event etc.) stay unseen.
+      const visible = {
+        sword_fakeentrance: 'spr_board_sword_fakeentrance',
+        b1swordentrance: 'spr_board_downstairs',
+        b2s_icedoor: 'spr_board_b2s_icedoor_outside',
+        b2_bridgeoverlay: 'spr_board_b2_bridgeoverlay',
+        ladder: 'spr_board_ladder',
+        b3s_stanchion: 'spr_board_b3s_stanchion',
+        '1_sword_shadowtease': 'spr_shadow_mantle_idle',
+      }[e.obj];
+      if (visible && onScreen(e.x, e.y)) {
+        drawSprite(visible, e.obj === 'b3s_stanchion' ? e.imageIndex : animClock * 0.1, e.x, e.y);
+      }
+    }
+    for (const t of trees) {
+      if (onScreen(t.x, t.y)) drawSprite(t.cold ? 'spr_board_tree_cold' : 'spr_board_tree', animClock * 0.1, t.x, t.y);
+    }
+    for (const c of cactus) {
+      if (onScreen(c.x, c.y)) drawSprite(c.cc && c.cc.cold ? 'spr_board_cactus_cold' : 'spr_board_cactus', c.frame, c.x, c.y);
+    }
+    for (const d of docks) {
+      if (onScreen(d.x, d.y)) drawSprite('spr_board_dock', 0, d.x, d.y);
+    }
+    for (const c of candies) {
+      if (c.dropped && c.t > 120 && Math.floor(c.t / 4) % 2) continue;   // the blink
+      drawSprite('spr_board_candy', 0, c.x, c.y);
+    }
+    if (pickup && !pickup.taken && !kris.sword) {
+      drawSprite('spr_board_key', Math.floor(animClock * 0.2) % 7, pickup.x, pickup.y);
+    }
+    for (const b of boats) {
+      if (b.gone) continue;
+      const bobY = Math.abs(Math.sin(b.bob / 15) * 2);
+      drawSprite('spr_board_raft', 0, b.x, b.y + bobY);
+    }
 
-    ctx.restore();
+    foes.draw(g, S);
 
-    // The screen's edge. The game frames this area with the show's set;
-    // this is a plain bezel in its place.
-    ctx.strokeStyle = '#2e2e2e';
-    ctx.lineWidth = 2;
-    ctx.strokeRect(PANE_X - 1, PANE_Y - 1, PANE_W + 2, PANE_H + 2);
-
-    drawHealthbar();
-
-    // The death event draws over everything, at 640x480 — the whole window,
-    // not the pane.
-    if (death) drawDeath();
+    // Kris — on the raft, mid-swing, or walking.
+    let frame, dx = 0, dy = 0;
+    let name;
+    if (kris.swordbuffer > 0) {
+      name = `kris_strike_${FACE_NAME[kris.facing]}`;
+      const idx = STRIKE_FRAME[kris.swordbuffer] ?? 0;
+      const meta = S.meta(`spr_board_kris_strike_${FACE_NAME[kris.facing]}`);
+      let img = S.frame(`spr_board_kris_strike_${FACE_NAME[kris.facing]}`, idx);
+      if (img) {
+        if (kris.blend === 'red') img = S.tinted(img, '#ff0000');
+        [dx, dy] = STRIKE_OFFSET[kris.facing];
+        g.drawImage(img, Math.round(kris.x) + dx, Math.round(kris.y) + dy,
+          img.width * 2, img.height * 2);
+        return;
+      }
+    }
+    const walkName = `spr_board_kris_walk_${FACE_NAME[kris.facing]}`;
+    let img = S.frame(walkName, Math.floor(kris.imageIndex) % 2);
+    if (img) {
+      if (kris.blend === 'red') img = S.tinted(img, '#ff0000');
+      const bobY = kris.boat ? Math.abs(Math.sin(animClock / 15) * 2) - 6 : 0;
+      g.drawImage(img, Math.round(kris.x), Math.round(kris.y) + bobY, KRIS_SIZE, KRIS_SIZE);
+    }
   }
 
-  /* obj_board_healthbar's Draw. In a sword room obj_ch3_gameshow makes ONE
-     of these, for Kris, at (270,34) in #DBFC8F — the party bars at
-     (128/222/316, 32) are the non-sword layout. The fill is spr_whitepx
-     stretched to (healthamt * 50) x 6 at (+14,+12), which is a rectangle
-     and needs no art; only the bar's own frame is a sprite. */
-  function drawHealthbar() {
-    const amt = Math.max(0, Math.min(1, kris.myhealth / kris.maxhealth));
-    if (healthbarFrame.length) {
-      const f = healthbarFrame[kris.myhealth <= 0 ? 1 : 0] ?? healthbarFrame[0];
-      if (f) ctx.drawImage(f, HEALTHBAR_X, HEALTHBAR_Y, f.width * 2, f.height * 2);
+  /* The TV set: obj_gameshow_swordroute + obj_board_controller's Draw. */
+  function drawTV() {
+    // The colorchange merge, from the gameshow's Draw.
+    if (tv.change > 0) {
+      tv.color = mergeColor(tv.newColor, tv.color, tv.change / tv.changeTime);
+      tv.change -= 1;
     }
-    ctx.fillStyle = healthbarFlash > 0 ? '#ff0000' : HEALTHBAR_COLOR;
-    ctx.fillRect(HEALTHBAR_X + 14, HEALTHBAR_Y + 12, Math.round(amt * 50), 6);
+    // The set art (330x250 at origin (5,5), scale 2 -> drawn at (-10,-10)).
+    drawSprite('spr_gameshow_swordroutebg', 0, 0, 0);
+    // The glow below the screen: additive, tinted screencolor, alpha 0.5.
+    const glow = S.frame('spr_gameshow_swordroute_tvglow', 0);
+    if (glow) {
+      g.save();
+      g.globalCompositeOperation = 'lighter';
+      g.globalAlpha = 0.5;
+      g.drawImage(S.tinted(glow, tv.color), 0, 320, glow.width * 2, glow.height * 2);
+      g.restore();
+    }
+    // The Draw's black floor under everything past y 380.
+    g.fillStyle = '#000';
+    g.fillRect(0, 380, VIEW_W, VIEW_H - 380);
   }
 
-  /* The death event's Draw: flood the window, put Kris on top as a black
-     silhouette (image_blend = c_black), and spin him. */
-  function drawDeath() {
-    ctx.fillStyle = death.css;
-    ctx.fillRect(0, 0, VIEW_W, VIEW_H);
-    if (death.timer < 61) {
-      const f = krisSprite[FACE_NAME[death.facing]][0];
-      ctx.drawImage(tinted(f, '#000000'), Math.round(kris.x), Math.round(kris.y),
-        KRIS_SIZE, KRIS_SIZE);
+  /* The HUD strip — event_user(0), gated on drawui. */
+  function drawHUD() {
+    g.fillStyle = '#000';
+    g.fillRect(128, 32, 384, 32);
+    if (!tv.drawui) return;
+    font.draw(g, 'HP', 132, 40);
+    const absolutemax = 32;
+    const maxbar = 110 + 30 * (kris.swordlv - 1);
+    const hp = Math.max(0, Math.min(kris.myhealth, kris.maxhealth));
+    g.fillStyle = healthbarFlash > 0 ? 'rgba(255,0,0,1)' : 'rgba(255,255,255,0.25)';
+    g.fillRect(166, 40, (kris.maxhealth / absolutemax) * maxbar, 14);
+    g.fillStyle = healthbarFlash > 0 ? '#ff0000' : '#ffffff';
+    g.fillRect(166, 40, (hp / absolutemax) * maxbar, 14);
+    // The key icon, by the route counter: carried in level 2, spent in 3.
+    if (room.number === 2) drawSprite('spr_board_ui_icekey', 0, 412, 38);
+    if (room.number === 3) drawSprite('spr_board_ui_icekey', 1, 412, 38);
+    if (kris.sword) {
+      if (kris.swordlv < 4) {
+        font.draw(g, 'L', 280, 40);
+        font.draw(g, 'V', 294, 40);
+        font.draw(g, String(kris.swordlv), 310, 40);
+      } else {
+        font.draw(g, 'MAX', 278, 40);
+      }
+      const maxxp = 66;
+      let bar = Math.round(((kris.xp / kris.xptolevel) * maxxp) / 2) * 2;
+      if (kris.swordlv >= 4) bar = maxxp;
+      bar = Math.max(0, Math.min(maxxp, bar));
+      g.fillStyle = 'rgba(255,255,255,0.25)';
+      g.fillRect(328, 40, maxxp, 14);
+      g.fillStyle = '#ffffff';
+      g.fillRect(328, 40, bar, 14);
+      for (let i = 0; i < Math.min(kris.swordlv, 4); i++) {
+        drawSprite('spr_board_ui_sword', 0, 492 - 20 * i, 38);
+      }
+    }
+  }
+
+  function draw() {
+    animClock += 1;
+    g.fillStyle = '#000';
+    g.fillRect(0, 0, VIEW_W, VIEW_H);
+
+    g.save();
+    g.beginPath();
+    g.rect(PANE_X, PANE_Y, PANE_W, PANE_H);
+    g.clip();
+    drawWorld();
+    // The warp fade covers the pane both ways.
+    if (warp) {
+      const a = warp.t < 10 ? warp.t / 10 : Math.max(0, 1 - (warp.t - 10) / 15);
+      g.fillStyle = `rgba(0,0,0,${a})`;
+      g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
+    }
+    if (intro) {
+      const a = Math.max(0, 1 - intro.t / 60);
+      g.fillStyle = `rgba(0,0,0,${a})`;
+      g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
+    }
+    if (outro) {
+      const a = Math.min(1, outro.t / 50);
+      g.fillStyle = `rgba(0,0,0,${a})`;
+      g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
+    }
+    g.restore();
+
+    drawTV();
+    drawHUD();
+
+    if (outro && outro.t > 60) {
+      g.fillStyle = '#000';
+      g.fillRect(0, 0, VIEW_W, VIEW_H);
+      font.draw(g, room.number === 3 ? 'ESCAPED' : 'LEVEL COMPLETE', 320, 220, { align: 'center', scale: 2 });
+    }
+
+    if (death) {
+      g.fillStyle = death.css;
+      g.fillRect(0, 0, VIEW_W, VIEW_H);
+      if (death.timer < 61) {
+        const img = S.frame(`spr_board_kris_walk_${FACE_NAME[death.facing]}`, 0);
+        if (img) g.drawImage(S.tinted(img, '#000000'), Math.round(kris.x), Math.round(kris.y), KRIS_SIZE, KRIS_SIZE);
+      }
     }
   }
 
@@ -801,53 +1197,72 @@ export async function runBoard(canvas, level, opts = {}) {
     while (acc >= MS_PER_FRAME && guard++ < 8) {
       acc -= MS_PER_FRAME;
       if (death) {
-        // `global.interact = 1` — the board stops dead and only the death
-        // event runs.
         stepDeath();
         press1 = false;
         if (death.timer >= DEATH_END) restart();
         continue;
       }
+      if (intro) { stepIntro(); press1 = false; continue; }
+      if (outro) {
+        // The end card holds; the loop stays alive so the page can move on.
+        if (!outro.done) stepOutro();
+        press1 = false;
+        continue;
+      }
       stepShift();
       stepKris();
+      stepBoats();
       stepAnim();
       stepSword();
       stepPickup();
+      stepWarps();
       foes.step(kris);
       stepDamage();
       if (healthbarFlash > 0) healthbarFlash -= 1;
-      press1 = false;          // consumed; it is a pressed-edge, not a hold
+      press1 = false;
     }
     draw();
     raf = requestAnimationFrame(frame);
   }
-  // The screen you start on gets the same treatment the camera would give
-  // it on arrival.
-  foes.spawnVisible(spawners);
-
+  arrive();
   raf = requestAnimationFrame(frame);
 
-  // Exposed for debugging and automated checks, like the sim's window.__sim.
   window.__board = {
     get kris() { return kris; },
     get shift() { return shift; },
+    get warp() { return warp; },
     get world() { return world; },
     get health() { return kris.myhealth; },
     get sword() { return kris.sword; },
     set sword(v) { kris.sword = !!v; },
     get swordlv() { return kris.swordlv; },
+    set swordlv(v) { kris.swordlv = v; },
     get xp() { return kris.xp; },
-    get pickup() { return pickup; },
-    swing() { press1 = true; },
     get dying() { return death !== null; },
+    get outro() { return outro; },
+    get intro() { return intro; },
+    get tv() { return tv; },
+    get pickup() { return pickup; },
+    get boats() { return boats; },
+    get candies() { return candies; },
+    get treeLoops() { return treeLoops; },
     solids,
     get foes() { return foes; },
-    /** The controller's flag. Setting it re-arms every hitbox on the board. */
-    get violence() { return violence; },
-    set violence(v) { violence = !!v; foes.violence = violence; },
+    get violence() { return foes.violence; },
+    set violence(v) { foes.violence = v; },
+    audio,
+    swing() { press1 = true; },
+    /** Debug: jump to a screen. Same code path as a real warptouch. */
+    warpTo(warpx, warpy, playerX, playerY) { startWarp({ warpx, warpy, playerX, playerY }); },
+    skipIntro() { if (intro) { intro = null; tv.drawui = true; retint(INTRO_COLOR[room.number], 1); } },
     restart,
     press: (k, on = true) => { if (on) held.add(k); else held.delete(k); },
-    stop() { cancelAnimationFrame(raf); window.removeEventListener('keydown', onKey); window.removeEventListener('keyup', onKeyUp); },
+    stop() {
+      cancelAnimationFrame(raf);
+      audio.stopMusic();
+      window.removeEventListener('keydown', onKey);
+      window.removeEventListener('keyup', onKeyUp);
+    },
   };
   return window.__board;
 }

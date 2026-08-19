@@ -5,13 +5,17 @@
 *_research/
 gml_dump/
 
-# Art is extracted per-machine from the player's own copy; only the curated
-# pack under assets/sprites ships (the carve-out below).
+# The shipped asset pack: sprites, audio and the font are extracted from the
+# game and committed — the asset posture allows it (all extracted audio and
+# art may ship publicly). tools/extract-assets.sh regenerates the lot.
 *.png
 !assets/sprites/*.png
+!assets/font/*.png
 
 # Audio ships per the project's permission posture; raw extraction scratch
 # does not.
+!assets/audio/*.wav
+!assets/audio/*.ogg
 /tmp/
 *.log
 

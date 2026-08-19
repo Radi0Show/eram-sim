@@ -18,6 +18,15 @@ carrying its comments. `tools/build-levels.py` regenerates
 generated, never hand-edited. `tools/devserver.py` serves on port 8411, its
 own port on purpose.
 
+**THE BUILD IS COMPLETE** — all three levels playable start to end: every
+enemy kind at the game's own half-frame cadence, projectiles, warps (touch
+AND entrance — an entrance converts an edge shift into a warp), the tree
+loop, the boat (embark is the INTERACT — Z on a dock), the cactus, candy,
+the TV set with per-screen colours, the real HUD strip (event_user 0 — NOT
+obj_board_healthbar, which never instantiates in sword rooms), audio, and
+the three endings. RECON.md's "The full build" section is the ledger;
+its "Labelled approximations" list is mirrored on the page.
+
 `sim/enemies.js` is the roster, contact damage and the sword's victims.
 **Before changing anything about whether an enemy is dangerous, read
 RECON.md's "The sword" section.** Two flags decide it and they are not the
@@ -38,7 +47,8 @@ once here and silently dropped every spawner. Change the generator.
 with `< /dev/null` or it hangs forever at 0% CPU looking exactly like the
 "concurrent runs wedge" failure. Two 40-minute stalls came from this.
 
-Next work is listed at the end of RECON.md, in order.
+Remaining niceties (CRT filter, caterpillar followers, set-piece text)
+are listed at the end of RECON.md under "Still to do, if ever".
 
 Session basics (same machine as knight-sim):
 

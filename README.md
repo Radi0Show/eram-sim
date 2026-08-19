@@ -32,12 +32,13 @@ A fan project, unaffiliated with Toby Fox. DELTARUNE © Toby Fox —
 
 ## Rebuilding the assets
 
-The art is **not committed** — it is extracted from your own copy of the
-game (see `.gitignore`). Two steps, both idempotent:
+The full asset pack (sprites, sounds, music, the font) IS committed, per
+the project's asset posture. To regenerate it from your own copy of the
+game:
 
 ```sh
-tools/extract-sprites.sh        # sprites -> assets/*.png
-python3 tools/build-levels.py   # rooms   -> assets/levels/*.json
+tools/extract-assets.sh         # one CLI run -> assets/{sprites,audio,font}
+python3 tools/build-levels.py   # rooms -> assets/levels/*.json
 ```
 
 `build-levels.py` owns the level files completely — tiles, solids, enemy

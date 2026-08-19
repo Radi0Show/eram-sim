@@ -1,64 +1,70 @@
 #!/usr/bin/env python3
 """Turn the research dumps into the level data the sim loads.
 
-The three sword-route levels are read out of the chapter with
-knight-research's dump_room.csx (tiles) and dump_room_instances.csx
-(instances), then reduced here to one JSON per level: the tile grid, the
-collision rectangles, where Kris starts and where the camera starts.
+Inputs, all generated from the game by the research tooling:
+  /tmp/tiles_<room>/room.json        dump_room.csx           (tile grid)
+  /tmp/eram_mega/inst2_<room>.json   eram_mega.csx           (instances v2:
+                                     color + creation-code name)
+  ~/knight-research/gml_dump/CodeEntries/gml_RoomCC_<room>_<n>_PreCreate.gml
+                                     the per-instance creation code, already
+                                     decompiled by the bulk dump
 
-Nothing here is authored. If a number in a level file looks wrong, it is
-wrong in this script or in the dump, not in a designer's head — re-run and
-diff rather than editing the JSON by hand.
-
-    python3 tools/build-levels.py            # expects /tmp/tiles_<room>/
+One JSON per level: tiles, every solid layer (Kris's, the boat's, the
+fish's), the enemy spawners with the dispatch resolved, the sword pickup,
+warps WITH their targets, triggers, the per-screen colour changers, water
+and waterfall and tree-spawner regions, and every visible decoration. If a
+number is wrong it is wrong here or in a dump, not in a designer's head —
+re-run and diff.
 """
-import json, os, sys
-
-# obj_board_camera's Create: where each room's world is parked so the first
-# screen lands in the 384x256 pane at (128,64).
-CAMERA_START = {
-    'room_board_1_sword': (896, 64),
-    'room_board_2_sword': (2432, 3648),
-    'room_board_3_sword': (1280, 320),
-}
+import json, os, re, sys, glob
 
 LEVELS = [
-    ('room_board_1_sword', 1, 'BOARD 1 · the desert'),
-    ('room_board_2_sword', 2, 'BOARD 2 · the water'),
-    ('room_board_3_sword', 3, 'BOARD 3 · the approach'),
+    ('room_board_1_sword', 1, 'BOARD 1 · THE DESERT'),
+    ('room_board_2_sword', 2, 'BOARD 2 · THE WATER'),
+    ('room_board_3_sword', 3, 'BOARD 3 · THE APPROACH'),
 ]
 
-# Every obj_board_* that blocks. spr_solid_board is 32x32 and each instance
-# carries its own scale, so a solid is (x, y, 32*sx, 32*sy).
-SOLID_OBJECTS = {
-    'obj_board_solid', 'obj_board_solidfish', 'obj_board_solidcorner',
-    'obj_board_boatsolid', 'obj_board_solid_treegreen', 'obj_board_camsolid',
-}
-SOLID_CELL = 32
+CAMERA_START = {'room_board_1_sword': (896, 64),
+                'room_board_2_sword': (2432, 3648),
+                'room_board_3_sword': (1280, 320)}
+
+# Three different walls for three different things:
+#   obj_board_solid (+corner, +treegreen)  blocks KRIS (place_meeting in
+#                                          obj_mainchara_board's Step)
+#   obj_board_boatsolid                    blocks THE BOAT (obj_board_boat's
+#                                          Step collides with this, never
+#                                          with obj_board_solid)
+#   obj_board_solidfish                    blocks THE BLUEFISH (its Step's
+#                                          collision_obj resolves to id 1066
+#                                          = obj_board_solidfish in the
+#                                          sword rooms)
+KRIS_SOLID = {'obj_board_solid', 'obj_board_solidcorner', 'obj_board_solid_treegreen'}
+BOAT_SOLID = {'obj_board_boatsolid'}
+FISH_SOLID = {'obj_board_solidfish'}
+CELL = 32
 
 # obj_board_enemy_spawner's user event 0: a 21-branch dispatch on the
-# spawner instance's OWN image_index. Only the branches that appear on the
-# sword route are given stats here; the rest resolve to a kind so an
-# unexpected index is visible in the data rather than silently dropped.
+# spawner instance's OWN image_index. Stats read from each branch and the
+# enemy Creates. `immunity` is sword_immunity_lv: a sword hit only damages
+# when kris.swordlv >= it, otherwise the blade rings off.
 #
-# `sword_immunity_lv` is what the sword cares about: a hit only damages when
-# kris.swordlv >= it, otherwise the blade rings off (snd_board_sword_metal).
-# hp 999 is the gray monster — it cannot be killed at all.
+# NOTE the lizard: scr_board_enemy_init sets hp 1 but the lizard's own
+# Create then sets hp = 2 — an earlier revision of this table said 1.
 SPAWNER_DISPATCH = {
     0:  {'kind': 'monster',   'hp': 1,   'immunity': 1},
     1:  {'kind': 'monster',   'hp': 999, 'immunity': 1, 'blend': 'gray'},
     2:  {'kind': 'monster',   'hp': 2,   'immunity': 2, 'blend': 'yellow', 'spd': 4, 'variant': 1},
-    3:  {'kind': 'monster',   'hp': 2,   'immunity': 3, 'blend': 'orange', 'spd': 4, 'variant': 2},
+    3:  {'kind': 'monster',   'hp': 2,   'immunity': 3, 'blend': 'orange', 'spd': 5, 'variant': 2},
     4:  {'kind': 'flower',    'hp': 1,   'immunity': 2},
     5:  {'kind': 'flower',    'hp': 1,   'immunity': 1, 'variant': 1},
     6:  {'kind': 'bluefish',  'hp': 1,   'immunity': 2},
     7:  {'kind': 'bluefish',  'hp': 5,   'immunity': 1},
     8:  {'kind': 'silentcat', 'hp': 1,   'immunity': 1},
     9:  {'kind': 'singingcat','hp': 2,   'immunity': 1, 'spd': 6, 'variant': 1},
-    10: {'kind': 'lizard',    'hp': 1,   'immunity': 1},
-    11: {'kind': 'lizard',    'hp': 1,   'immunity': 1, 'spd': 5, 'variant': 1},
-    12: {'kind': 'lizard',    'hp': 1,   'immunity': 1, 'spd': 6, 'variant': 2},
-    13: {'kind': 'bluebird',  'hp': 1,   'immunity': 1},
+    10: {'kind': 'lizard',    'hp': 2,   'immunity': 1},
+    11: {'kind': 'lizard',    'hp': 2,   'immunity': 1, 'spd': 5, 'variant': 1},
+    12: {'kind': 'lizard',    'hp': 2,   'immunity': 1, 'spd': 6, 'variant': 2},
+    13: {'kind': 'bluebird',  'hp': 8,   'immunity': 4},
     14: {'kind': 'deer',      'hp': 1,   'immunity': 1},
     15: {'kind': 'black_deer','hp': 999, 'immunity': 1},
     16: {'kind': 'rotaty',    'hp': 1,   'immunity': 1},
@@ -66,9 +72,62 @@ SPAWNER_DISPATCH = {
     # 18+ are not enemies at all — fire bars, ice puzzles, trees, blocks.
 }
 
+# Objects that are pure bookkeeping — never drawn, never data.
+SKIP = {
+    'obj_mainchara', 'obj_board_camera', 'obj_board_controller',
+    'obj_darkcontroller', 'obj_gameshow_swordroute',
+    'obj_board_1_sword_manager', 'obj_b2s_swordmanager', 'obj_b3s_swordmanager',
+}
+
+CC_DIR = os.path.expanduser('~/knight-research/gml_dump/CodeEntries')
+MEGA = '/tmp/eram_mega'
+
+SPRITES = json.load(open(f'{MEGA}/sprites.json'))
+OBJECTS = json.load(open(f'{MEGA}/objects.json'))
+
+
+def parse_cc(name):
+    """The creation code is simple `var = value;` lines — parse to a dict."""
+    if not name:
+        return {}
+    path = os.path.join(CC_DIR, name + '.gml')
+    if not os.path.exists(path):
+        return {'_missing': name}
+    out = {}
+    for m in re.finditer(r'(\w+)\s*=\s*(-?\d+|true|false|"[^"]*")\s*;', open(path).read()):
+        k, v = m.group(1), m.group(2)
+        if v == 'true':
+            out[k] = True
+        elif v == 'false':
+            out[k] = False
+        elif v.startswith('"'):
+            out[k] = v[1:-1]
+        else:
+            out[k] = int(v)
+    return out
+
+
+def inst_color(c):
+    """Room instance colour is ABGR packed; white (0xffffffff) means unset."""
+    return '#%02x%02x%02x' % (c & 255, (c >> 8) & 255, (c >> 16) & 255)
+
+
+def sprite_of(obj):
+    return (OBJECTS.get(obj) or {}).get('sprite')
+
+
+def rect_of(i):
+    """An instance's covered rect, from its sprite dims x its room scale.
+    Solids and regions use spr dims * scale; origins on these are (0,0)."""
+    spr = sprite_of(i['obj'])
+    meta = SPRITES.get(spr, {'w': CELL, 'h': CELL})
+    return {'x': i['x'], 'y': i['y'],
+            'w': int(meta['w'] * i['sx']), 'h': int(meta['h'] * i['sy'])}
+
+
 def build(room, number, title, out_dir):
     tiles_path = f'/tmp/tiles_{room}/room.json'
-    inst_path = f'/tmp/inst_{room}.json'
+    inst_path = f'{MEGA}/inst2_{room}.json'
     for p in (tiles_path, inst_path):
         if not os.path.exists(p):
             print(f'  !! missing {p} — re-run the dumps for {room}')
@@ -82,68 +141,120 @@ def build(room, number, title, out_dir):
     g = (bg >> 8) & 255 if bg else 0
     b = (bg >> 16) & 255 if bg else 0
 
-    solids = [
-        {'x': i['x'], 'y': i['y'],
-         'w': int(SOLID_CELL * i['sx']), 'h': int(SOLID_CELL * i['sy'])}
-        for i in inst if i['obj'] in SOLID_OBJECTS
-    ]
-    # THE ENEMIES. Resolved here rather than in the sim so the level data
-    # says what stands where; the spawn RULE (camera con 98, player bounds)
-    # lives in sim/enemies.js.
-    spawners = []
-    for i in inst:
-        if i['obj'] != 'obj_board_enemy_spawner':
-            continue
-        idx = int(i['imageIndex'])
-        d = SPAWNER_DISPATCH.get(idx)
-        sp = {'x': i['x'], 'y': i['y'], 'index': idx}
-        if d:
-            sp.update({'kind': d['kind'], 'hp': d['hp'],
-                       'immunity': d['immunity'], 'variant': d.get('variant'),
-                       'blend': d.get('blend'), 'spd': d.get('spd')})
-        else:
-            sp['kind'] = None          # index 18+: not an enemy
-        spawners.append(sp)
-
-    kris = next((i for i in inst if i['obj'] == 'obj_mainchara_board'), None)
-    # THE SWORD. Every sword level holds exactly one obj_board_pickup, drawn
-    # with spr_board_key at scale 2. Its Step ends `player.sword = true`.
-    pickup = next((i for i in inst if i['obj'] == 'obj_board_pickup'), None)
-    cam = CAMERA_START.get(room)
-
     out = {
-        '_source': f'{room}, DELTARUNE Chapter 3 — dump_room.csx + '
-                   'dump_room_instances.csx. Rebuild with tools/build-levels.py.',
-        'number': number,
-        'title': title,
-        'room': room,
+        '_source': f'{room}, DELTARUNE Chapter 3 — dump_room.csx + eram_mega.csx. '
+                   'Rebuild with tools/build-levels.py; never hand-edit.',
+        'number': number, 'title': title, 'room': room,
         'width': rd['width'], 'height': rd['height'],
-        'roomStartingX': cam[0] if cam else 128,
-        'roomStartingY': cam[1] if cam else 64,
+        'roomStartingX': CAMERA_START[room][0],
+        'roomStartingY': CAMERA_START[room][1],
         'bgColor': '#%02x%02x%02x' % (r, g, b),
-        'tileset': {'file': '../tileset.png', 'tileW': tiles['tileW'],
+        'tileset': {'file': 'sprites/tileset.png', 'tileW': tiles['tileW'],
                     'tileH': tiles['tileH'], 'cols': tiles['tileCols'],
                     'border': tiles['border']},
         'tilesX': tiles['tilesX'], 'tilesY': tiles['tilesY'],
         'grid': tiles['grid'],
-        'solids': solids,
-        'spawners': spawners,
-        'kris': {'x': kris['x'], 'y': kris['y'], 'scale': int(kris['sx'])} if kris else None,
-        'pickup': {'x': pickup['x'], 'y': pickup['y'],
-                   'sprite': pickup['sprite']} if pickup else None,
-        # Counted, not translated — these are the next phase's work.
-        'todo': {k: sum(1 for i in inst if i['obj'] == k)
-                 for k in sorted({i['obj'] for i in inst})
-                 if k not in SOLID_OBJECTS and k.startswith('obj_board_')},
+        'solids': [], 'boatSolids': [], 'fishSolids': [],
+        'spawners': [], 'cactus': [],
+        'warps': [], 'triggers': [], 'colorChangers': [],
+        'water': [], 'waterfalls': [], 'treeSpawners': [],
+        'boats': [], 'docks': [], 'props': [], 'events': [],
+        'kris': None, 'pickup': None,
     }
+
+    for i in inst:
+        o = i['obj']
+        cc = parse_cc(i.get('cc'))
+        if o in SKIP:
+            continue
+        if o == 'obj_mainchara_board':
+            out['kris'] = {'x': i['x'], 'y': i['y']}
+        elif o in KRIS_SOLID:
+            out['solids'].append(rect_of(i))
+        elif o in BOAT_SOLID:
+            out['boatSolids'].append(rect_of(i))
+        elif o in FISH_SOLID:
+            out['fishSolids'].append(rect_of(i))
+        elif o == 'obj_board_enemy_spawner':
+            idx = int(i['imageIndex'])
+            d = SPAWNER_DISPATCH.get(idx)
+            sp = {'x': i['x'], 'y': i['y'], 'index': idx}
+            if d:
+                sp.update({'kind': d['kind'], 'hp': d['hp'],
+                           'immunity': d['immunity'], 'variant': d.get('variant'),
+                           'blend': d.get('blend'), 'spd': d.get('spd')})
+            else:
+                sp['kind'] = None
+            out['spawners'].append(sp)
+        elif o == 'obj_board_pickup':
+            out['pickup'] = {'x': i['x'], 'y': i['y'], 'cc': cc}
+        elif o == 'obj_board_cactus':
+            out['cactus'].append({'x': i['x'], 'y': i['y'], 'cc': cc})
+        elif o in ('obj_board_warptouch', 'obj_board_warpentrance'):
+            w = rect_of(i)
+            w.update({'kind': o.removeprefix('obj_board_'), **cc})
+            out['warps'].append(w)
+        elif o == 'obj_board_trigger':
+            t = rect_of(i)
+            t.update(cc)
+            out['triggers'].append(t)
+        elif o == 'obj_board_screenColorChanger':
+            out['colorChangers'].append(
+                {'x': i['x'], 'y': i['y'], 'color': inst_color(i['color'])})
+        elif o == 'obj_board_shallowwater':
+            out['water'].append({'x': i['x'], 'y': i['y'], 'type': 'shallow',
+                                 'cols': int(i['sx'] // 2), 'rows': int(i['sy'] // 2)})
+        elif o in ('obj_board_oasis_sword', 'obj_board_smallpond_sword',
+                   'obj_board_lancermoat_sword', 'obj_board_b1powerpond'):
+            out['water'].append({'x': i['x'], 'y': i['y'],
+                                 'type': o.removeprefix('obj_board_'),
+                                 'sprite': sprite_of(o)})
+        elif o == 'obj_board_waterfall':
+            out['waterfalls'].append({'x': i['x'], 'y': i['y'],
+                                      'cols': int(i['sx'] // 2), 'rows': int(i['sy'] // 2)})
+        elif o == 'obj_board_treespawner':
+            out['treeSpawners'].append({'x': i['x'], 'y': i['y'],
+                                        'cols': int(i['sx']), 'rows': int(i['sy']),
+                                        'cold': inst_color(i['color']).lower() == '#fdfdfd'})
+        elif o == 'obj_board_boat':
+            out['boats'].append({'x': i['x'], 'y': i['y'], 'cc': cc})
+        elif o == 'obj_board_dock':
+            out['docks'].append({'x': i['x'], 'y': i['y']})
+        elif o in ('obj_board_b1swordentrance', 'obj_board_b1_shadowteaseentrance',
+                   'obj_board_sword_fakeentrance', 'obj_board_swordroute_treeteleportroom',
+                   'obj_board_b2sword_boatwarp', 'obj_board_b2s_icedoor',
+                   'obj_board_1_sword_b1store', 'obj_board_1_sword_shadowtease',
+                   'obj_board_sword_shadowtease_face', 'obj_board_sword_shadowtease_teeth',
+                   'obj_b2s_heartisland', 'obj_b2s_northernlightsroom',
+                   'obj_b2s_tennaentrance', 'obj_b2s_tennamonologue', 'obj_b2s_swordroom',
+                   'obj_board_bridgespawner', 'obj_board_b2_bridgeoverlay',
+                   'obj_board_ladder', 'obj_board_cold', 'obj_board_b3s_stanchion'):
+            out['events'].append({'obj': o.removeprefix('obj_board_').removeprefix('obj_'),
+                                  'sprite': sprite_of(o),
+                                  'x': i['x'], 'y': i['y'],
+                                  'sx': i['sx'], 'sy': i['sy'],
+                                  'imageIndex': int(i['imageIndex']), 'cc': cc})
+        else:
+            spr = sprite_of(o)
+            if spr and spr in SPRITES:
+                p = {'sprite': spr, 'x': i['x'], 'y': i['y'],
+                     'imageIndex': int(i['imageIndex'])}
+                if inst_color(i['color']) != '#ffffff':
+                    p['color'] = inst_color(i['color'])
+                out['props'].append(p)
+            # invisible unknowns are dropped, deliberately loudly:
+            else:
+                print(f'    (skipped {o} at {i["x"]},{i["y"]} — no sprite)')
+
     path = os.path.join(out_dir, f'{number}.json')
     json.dump(out, open(path, 'w'))
     print(f'  level {number}: {rd["width"]}x{rd["height"]}, '
-          f'{len(solids)} solids, {tiles["tilesX"]}x{tiles["tilesY"]} tiles, '
-          f'{sum(1 for s in spawners if s["kind"])} spawners, '
-          f'sword at {(pickup["x"], pickup["y"]) if pickup else "-"} '
-          f'-> {path}')
+          f'{len(out["solids"])}/{len(out["boatSolids"])}/{len(out["fishSolids"])} solids, '
+          f'{sum(1 for s in out["spawners"] if s["kind"])} spawners, '
+          f'{len(out["warps"])} warps, {len(out["colorChangers"])} colors, '
+          f'{len(out["props"])} props -> {path}')
     return out
+
 
 def main():
     out_dir = os.path.join(os.path.dirname(__file__), '..', 'assets', 'levels')
@@ -151,10 +262,12 @@ def main():
     built = []
     for room, number, title in LEVELS:
         b = build(room, number, title, out_dir)
-        if b: built.append({'number': number, 'title': title, 'room': room,
-                            'file': f'{number}.json'})
+        if b:
+            built.append({'number': number, 'title': title, 'room': room,
+                          'file': f'{number}.json'})
     json.dump(built, open(os.path.join(out_dir, 'index.json'), 'w'))
     print(f'wrote {len(built)} level(s)')
+
 
 if __name__ == '__main__':
     main()

@@ -1,319 +1,769 @@
-// THE BOARD'S ENEMIES.
+// THE BOARD'S ENEMIES — every kind the three sword levels place, at the
+// game's own cadence.
 //
-// One spawner object carries the whole roster. `obj_board_enemy_spawner`'s
-// user event 0 is a 21-branch dispatch on its own `image_index` — monster,
-// flower, bluefish, silverfish, cats, lizards, birds, deer, and at the far
-// end things that are not enemies at all (fire bars, ice-puzzle
-// controllers, pushable blocks). Finding it is what turns "reverse a dozen
-// bespoke enemies" into "read one switch". None of the sword-route
-// spawners carry creation code, so every `type` is the PreCreate default of
-// 0 and none of the `type == 1` variants (spear boss, Toriel deer, the
-// miniboss walls) is reachable here.
+// One spawner object carries the whole roster: `obj_board_enemy_spawner`'s
+// user event 0 is a 21-branch dispatch on its own image_index, resolved
+// into the level data by tools/build-levels.py. The sword levels place
+// indices 0 (monster), 2 (yellow spear monster), 4 (flower), 6 (bluefish),
+// 10 (lizard) and 13 (bluebird).
 //
-// WHEN THEY APPEAR is the part worth getting right: nothing spawns on a
-// timer. obj_board_camera, at `con == 98` — the frame a screen shift lands,
-// before control returns — runs
+// LIFETIME — this is the part that was wrong before and is now read from
+// obj_board_camera's Step directly: THE MOMENT A SHIFT BEGINS, EVERY ENEMY
+// AND PROJECTILE IS DESTROYED (`with (obj_board_enemy_parent)
+// instance_destroy()`, plus the long per-projectile list). At con 98 — the
+// frame the shift lands — every spawner still alive that stands inside the
+// PLAYER's bounds (128..480, 64..288) fires again. Enemies are strictly
+// per-screen; only a KILLED spawner stays gone (the death handler destroys
+// it with its enemy).
 //
-//     with (obj_board_enemy_spawner)
-//         if (x >= 128 && x <= 480 && y >= 64 && y <= 288) event_user(0);
+// CADENCE. Monster, bluefish and lizard run at HALF RATE: their Steps open
 //
-// so a screen populates itself the moment it becomes the screen you are on,
-// and the bounds it tests are the PLAYER's bounds, not the pane's.
+//     updatetimer++;
+//     if (updatetimer == 2) { updatetimer = 0; exit; }
 //
-// WHETHER THEY CAN HURT YOU AT ALL is a separate switch, and it is the
-// thing to know before reading the damage code. `scr_board_enemy_init` sets
+// so they act on every other frame — and everything inside (delay, timers,
+// pixel-walks) counts acting frames, not real ones. The bluebird has the
+// same gate with inverted polarity. THE FLOWER HAS NO GATE and runs every
+// frame. Projectiles move only every third frame (their own
+// `updatetimer == 3` pattern) at spd 8 (pellet) / 20 (spear).
 //
-//     aggressive = obj_board_controller.violence
-//     active_hitbox = aggressive
+// WHO CAN HURT YOU is three separate rules, none of them "violence" alone:
+//   monster  — aggressive starts as obj_board_controller.violence, and the
+//              monster's own Step forces `aggressive = true` (and, in level
+//              1, active_hitbox = true, spd 3, image_speed 0.2) whenever
+//              swordlv > 1. Type-0 monsters NEVER show the angry sprite:
+//              the angry art is the spear telegraph (bulletimer >
+//              shoot_wait_time), and only type 1 increments bulletimer.
+//   flower   — level 1: armed only while swordlv > 1. Level 2: armed the
+//              moment Kris HAS the sword, and sword_immunity_lv drops to 0.
+//   bluefish — aggressive = violence at spawn (level 2: also once Kris has
+//              the sword). In level 1 nothing ever arms the pond fish: they
+//              dash, and the dash cannot hurt. That is the game's code.
+//   lizard   — aggressive = violence; `if (!aggressive) dontmove = true` —
+//              a docile lizard does not act at all.
+//   bluebird — aggressive = violence, never overridden: in level 1 it is a
+//              flying decoration you can (barely) kill.
 //
-// and the player's damage block refuses to fire unless
-// `hazard.active_hitbox == true`. obj_board_controller's Create says
+// The contact hitbox is spr_hitbox_10px_center at per-kind scale, centred:
+// monster/lizard/bluebird 20x20, bluefish 10x10, flower 2.5x2.5 (the
+// flower's threat is its pellets, not its body).
 //
-//     violence = true;
-//     if (room == room_board_1_sword) violence = false;
-//
-// so level 1 opens harmless. The only writers of `violence` are that Create
-// and obj_b2s_swordmanager (level 2), which forces it false while
-// `scon == 0` and flips it true the moment `kris.sword` is true.
-//
-// BUT `violence` IS NOT THE LAST WORD, and this is the part that makes the
-// sword matter. The monster's own Step re-derives its aggression every
-// frame:
-//
-//     var chaseplayer = true;
-//     if (136 && obj_mainchara_board.swordlv > 1)   // `136` is a decompiler
-//         aggressive = true;                        // artifact, always true
-//     if (!aggressive) { active_hitbox = false; chaseplayer = false; }
-//
-// So `aggressive` gates BOTH the hitbox and the chase — a docile monster
-// does not merely fail to hurt you, it does not follow you either — and
-// SWORDLV > 1 FORCES IT TRUE regardless of `violence`. Level 1's
-// `xptolevel` is 3, so killing three monsters levels the sword and turns
-// the whole board hostile. The level is peaceful until you start killing
-// things.
-//
-// Constants are from `scr_board_enemy_init` and the monster's own Create:
-//
-//   hp 1 · xp_given 1 · spd 3 (2 in level 1 at swordlv 1)
-//   the contact hitbox carries damage 2 — not the enemy's own `damage = 1`
-//   and it is spr_hitbox_10px_center: 10x10, origin (5,5), at scale 2 —
-//   a 20x20 box CENTRED on the enemy, inset 6px inside its 32x32 tile,
-//   not the whole tile
-//   distance_to_become_aggressive 90
-//   every enemy is drawn at scale 2 (scr_darksize)
-//
-// APPROXIMATION, LABELLED: the chase is A* over the same 32px grid the game
-// builds (`global.cell_size = 32`, rebuilt by `scr_board_gridreset`), but
-// GameMaker's `mp_grid_path` internals are not reproduced step for step, so
-// a chasing enemy takes a route of the same shape rather than the identical
-// one. Everything else here is read.
+// Constants cited inline; nothing tuned.
 
 export const CELL = 32;
-const SCALE = 2;
 const AGGRO = 90;                 // distance_to_become_aggressive
-const DEAGGRO = AGGRO - 20;       // and it gives up at 70
-const ENEMY_SIZE = 32;            // 16x16 art at scale 2
+const DEAGGRO = AGGRO - 20;       // the chase re-check gives up at 70
+const SIZE = 32;                  // 16x16 art at scale 2
 
-/* The contact hitbox: spr_hitbox_10px_center (10x10, origin 5,5) at scale
-   2, pinned to (parent.x + 16, parent.y + 16). That is 20x20 centred on the
-   enemy — 6px in from each edge of its tile. */
-const HITBOX_INSET = 6, HITBOX_SIZE = 20;
+/** Enemy bounds from the tail of scr_board_enemy_hurt_state — applied on
+ *  EVERY acting frame, and tighter than the player's own 128..480/64..288. */
+const BOUNDS = { x1: 160, x2: 448, y1: 96, y2: 256 };
 
-/* scr_board_enemy_hurt_state clamps every enemy to this, which is TIGHTER
-   than the player's own 128..480 / 64..288. */
-const ENEMY_BOUNDS = { x1: 160, x2: 448, y1: 96, y2: 256 };
-
-const HURTTIME = 10;              // set by a sword hit
-const KNOCKBACK_PX = 20;          // per frame, 1px at a time, while hurttimer > 6
-
-/** The player's own bounds — the rect the spawn test uses. */
+/** The player's bounds — the rect the spawn test uses. */
 export const SPAWN_BOUNDS = { x1: 128, x2: 480, y1: 64, y2: 288 };
 
-const DIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]];   // movedir = choose(0,1,2,3)
-
-/** obj_board_enemy_contact_hitbox's Create. The enemy's own `damage` is 1
- *  and is never what lands: the hazard you actually touch is this. */
+/** obj_board_enemy_contact_hitbox's Create. */
 export const CONTACT_DAMAGE = 2;
+
+const HITBOX = { monster: 20, lizard: 20, bluebird: 20, bluefish: 10, flower: 2.5 };
+
+// hitdir/movedir compass, matching the game: 0=right,1=up,2=left,3=down for
+// enemy movedir; kris.facing is 0=down,1=right,2=up,3=left for knockback.
+const MOVE = [[1, 0], [0, -1], [-1, 0], [0, 1]];
+const FACE = [[0, 1], [1, 0], [0, -1], [-1, 0]];
 
 export function createEnemies(level, opts = {}) {
   const solids = opts.solids ?? [];
+  const fishSolids = opts.fishSolids ?? [];
   const rng = opts.rng ?? Math.random;
-  // obj_board_controller Create, then obj_b2s_swordmanager for level 2.
-  let violence = opts.violence ?? false;
-  // Kris's live sword level — the monster's Step reads it every frame.
   const swordlv = opts.swordlv ?? (() => 1);
+  const hasSword = opts.hasSword ?? (() => false);
   const onKill = opts.onKill ?? (() => {});
+  const onCandy = opts.onCandy ?? (() => {});
+  const snd = opts.snd ?? (() => {});
+  let violence = opts.violence ?? false;
 
   const enemies = [];
-  const spawned = new Set();
+  const projectiles = [];
+  const fx = [];                       // defeat splashes
   const killedSpawners = new Set();
 
-  const blocked = (x, y) => solids.some((s) =>
-    x < s.x + s.w && x + ENEMY_SIZE > s.x && y < s.y + s.h && y + ENEMY_SIZE > s.y);
+  const boxHits = (set, x, y, w = SIZE, h = SIZE) => set.some((s) =>
+    x < s.x + s.w && x + w > s.x && y < s.y + s.h && y + h > s.y);
 
-  /**
-   * Fire every spawner standing on the screen that just arrived.
-   * Called once per landed shift, and once when the level opens.
-   */
+  /** GameMaker's distance_to_object: gap between bounding boxes, 0 on overlap. */
+  function bboxDist(e, kris) {
+    const dx = Math.max(0, Math.max(e.x - (kris.x + SIZE), kris.x - (e.x + SIZE)));
+    const dy = Math.max(0, Math.max(e.y - (kris.y + SIZE), kris.y - (e.y + SIZE)));
+    return Math.hypot(dx, dy);
+  }
+
+  /* ---------------- spawning ---------------- */
+
   function spawnVisible(spawners) {
     for (let i = 0; i < spawners.length; i++) {
       const sp = spawners[i];
-      if (spawned.has(i) || killedSpawners.has(i) || !sp.kind) continue;
+      if (killedSpawners.has(i) || !sp.kind) continue;
       if (sp.x < SPAWN_BOUNDS.x1 || sp.x > SPAWN_BOUNDS.x2
         || sp.y < SPAWN_BOUNDS.y1 || sp.y > SPAWN_BOUNDS.y2) continue;
-      spawned.add(i);
-      // Level 1 at swordlv 1 slows the monster to 2 and its animation to
-      // 0.1; above that it is 3 and 0.2 (monster Create / Step).
-      const slow = level.number === 1 && swordlv() === 1;
-      enemies.push({
-        kind: sp.kind, variant: sp.variant ?? null,
+      if (!(sp.kind in HITBOX)) continue;      // cats/deer never placed here
+      const e = {
+        kind: sp.kind, variant: sp.variant ?? 0,
         spawnerIndex: i,
-        x: sp.x, y: sp.y,
-        // Last frame's coordinates — what the knockback direction is taken
-        // from (`hazard.xprevious, hazard.yprevious`).
-        px: sp.x, py: sp.y,
-        hp: sp.hp ?? 1,
-        maxhp: sp.hp ?? 1,
-        immunity: sp.immunity ?? 1,     // sword_immunity_lv
-        blend: sp.blend ?? null,        // gray monsters ring the blade off
+        x: sp.x, y: sp.y, px: sp.x, py: sp.y,
+        hp: sp.hp ?? 1, maxhp: sp.hp ?? 1,
+        immunity: sp.immunity ?? 1,
+        blend: sp.blend ?? null,
         damage: CONTACT_DAMAGE,
-        delay: 0,
-        hurttimer: 0,
-        hitdir: -1,
-        // `aggressive = obj_board_controller.violence` at init.
+        ut: 0,                     // updatetimer
+        state: 'move',
+        movecon: 0, movetimer: 0, moveType: 0, movedir: Math.floor(rng() * 4),
+        isMovingTimer: 0, path: null, pathI: 0,
+        delay: 0, hurttimer: 0, hitdir: -1,
         aggressive: violence,
-        spd: sp.spd ?? (sp.kind === 'monster' && slow ? 2 : 3),
-        angry: false,
-        imageIndex: 0,
-        movedir: Math.floor(rng() * 4),
-        movetimer: 0,
-        // Only the monster chases; the rest hold station until their own
-        // behaviour is translated.
-        chases: sp.kind === 'monster',
-      });
+        activeHitbox: violence,
+        spd: sp.spd ?? 3,
+        imageIndex: 0, imageSpeed: 0.1,
+        bulletimer: 0, bubbletimer: 0,
+      };
+      if (e.kind === 'monster') {
+        // monster Create: bulletimer = choose(0,-10,10); level-1 slowdown.
+        e.bulletimer = [0, -10, 10][Math.floor(rng() * 3)];
+        if (level.number === 1 && e.variant === 0) e.spd = swordlv() > 1 ? 3 : 2;
+      }
+      if (e.kind === 'flower') {
+        e.bubbletimer = -10 + Math.floor(rng() * 21);
+        e.imageSpeed = 0.05;
+        e.telegraph = 0;           // 0 idle, >0 telegraph frames left
+      }
+      if (e.kind === 'bluefish') {
+        e.dashcon = 0; e.dashtimer = 0; e.spd = 3;
+      }
+      if (e.kind === 'lizard') {
+        e.spd = sp.spd ?? 5;
+        e.lastattack = 4; e.jumpedRecently = 0;
+        e.bulletimer = [-30, -20, 10][Math.floor(rng() * 3)];
+        e.jump = null;             // {startx,starty,tx,ty,t} while airborne
+      }
+      if (e.kind === 'bluebird') {
+        e.movetimer = -1; e.movespd = 1; e.con = 0; e.yoffset = -10;
+        e.destx = e.x; e.desty = e.y; e.startx = e.x; e.starty = e.y;
+        e.distance = 0; e.randprev = 0; e.ut = 1;   // inverted polarity
+        e.imageSpeed = 0;
+      }
+      enemies.push(e);
     }
   }
 
-  /** Everything moves with the screen, exactly like the walls do. */
+  /** The camera's shift-start cleanup: everything dies, spawners persist. */
+  function clearScreen() {
+    enemies.length = 0;
+    projectiles.length = 0;
+    fx.length = 0;
+  }
+
   function translate(dx, dy) {
     for (const e of enemies) { e.x += dx; e.y += dy; }
+    for (const p of projectiles) { p.x += dx; p.y += dy; }
+    for (const f of fx) { f.x += dx; f.y += dy; }
   }
+
+  /* ---------------- pathfinding (mp_grid_path stand-in) ----------------
+     A* over the same 32px cells, 4-directional, blocked where a Kris-solid
+     covers the cell. Labelled approximation: the route has the same shape
+     as mp_grid_path's, not necessarily the identical tie-break. */
+  function cellBlocked(cx, cy) {
+    const x = cx * CELL, y = cy * CELL;
+    return boxHits(solids, x + 1, y + 1, CELL - 2, CELL - 2);
+  }
+
+  function findPath(x0, y0, x1, y1) {
+    const key = (x, y) => `${x},${y}`;
+    const open = [{ x: x0, y: y0, g: 0, f: Math.abs(x1 - x0) + Math.abs(y1 - y0) }];
+    const came = new Map();
+    const gs = new Map([[key(x0, y0), 0]]);
+    const seen = new Set();
+    let guard = 0;
+    while (open.length && guard++ < 900) {
+      open.sort((a, b) => a.f - b.f);
+      const c = open.shift();
+      const ck = key(c.x, c.y);
+      if (seen.has(ck)) continue;
+      seen.add(ck);
+      if (c.x === x1 && c.y === y1) {
+        const path = [];
+        let k = ck;
+        while (k) { const [px, py] = k.split(',').map(Number); path.unshift({ x: px, y: py }); k = came.get(k); }
+        return path;
+      }
+      for (const [dx, dy] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nx = c.x + dx, ny = c.y + dy;
+        if (cellBlocked(nx, ny)) continue;
+        const nk = key(nx, ny);
+        const g = c.g + 1;
+        if (g < (gs.get(nk) ?? Infinity)) {
+          gs.set(nk, g);
+          came.set(nk, ck);
+          open.push({ x: nx, y: ny, g, f: g + Math.abs(x1 - nx) + Math.abs(y1 - ny) });
+        }
+      }
+    }
+    return null;
+  }
+
+  /* ---------------- shared: sword collision + hurt state ---------------- */
+
+  /** scr_board_enemy_sword_collision, called on the enemy's acting frame. */
+  function swordCollide(e, kris) {
+    const hb = kris.swordhitbox;
+    if (!hb || !hb.box || e.hurttimer !== 0) return;
+    const b = hb.box;
+    if (!(b.x < e.x + SIZE && b.x + b.w > e.x && b.y < e.y + SIZE && b.y + b.h > e.y)) return;
+    const lv = swordlv();
+    if (lv < e.immunity || e.blend === 'gray') {
+      // The blade rings off: hurttimer only, no knockback, no damage.
+      snd('snd_board_sword_metal');
+      e.hitdir = -1;
+      e.hurttimer = 10;
+      return;
+    }
+    e.path = null; e.isMoving = false;
+    e.hurttimer = 10;
+    snd('snd_board_damage');
+    e.activeHitbox = false;
+    e.hitdir = kris.facing;
+    e.angry = false;
+    if (e.hp !== 999) e.hp -= 1;
+  }
+
+  /** scr_board_enemy_hurt_state, on the enemy's acting frame.
+      Returns true if the enemy died and was removed. */
+  function hurtState(e, kris, idx) {
+    if (e.hurttimer > 0) {
+      e.hurttimer -= 1;
+      e.activeHitbox = false;
+      if (e.hurttimer === 0 && e.hp !== e.maxhp) e.activeHitbox = true;
+      if (e.hurttimer === 9 && e.hp <= 0) {
+        fx.push({ x: e.x + 16, y: e.y + 16, t: 0, candy: rollCandy(kris) });
+        snd('snd_board_kill');
+        onKill(e);                       // kris.xp += xp_given (1)
+        killedSpawners.add(e.spawnerIndex);
+        enemies.splice(idx, 1);
+        return true;
+      }
+      // Knocked back up to 20px per acting frame while hurttimer > 6,
+      // one pixel at a time, stopping at the first wall.
+      if (e.hurttimer > 6 && e.hitdir >= 0 && !(e.kind === 'lizard' && e.jump)) {
+        const [kx, ky] = FACE[e.hitdir];
+        for (let n = 0; n < 20; n++) {
+          if (boxHits(e.wallSet ?? solids, e.x + kx, e.y + ky)) break;
+          e.x += kx; e.y += ky;
+        }
+      }
+    }
+    // The clamp runs every call, hurt or not.
+    e.x = Math.min(BOUNDS.x2, Math.max(BOUNDS.x1, e.x));
+    e.y = Math.min(BOUNDS.y2, Math.max(BOUNDS.y1, e.y));
+    return false;
+  }
+
+  /** The candy roll, verbatim from scr_board_enemy_hurt_state. */
+  function rollCandy(kris) {
+    let rate = 5;
+    if (kris.myhealth < 8) rate += 20;
+    if (kris.myhealth < 3) rate += 30;
+    if (kris.myhealth === kris.maxhealth) rate = 0;
+    const roll = Math.floor(rng() * 101) < rate;
+    if (roll || (kris.monstersdefeated >= 6 && rate > 0)
+      || (kris.monstersdefeated >= 3 && kris.myhealth < 3 && rate > 0)) {
+      kris.monstersdefeated = 0;
+      return true;
+    }
+    kris.monstersdefeated += 1;
+    return false;
+  }
+
+  /* ---------------- the monster ---------------- */
+
+  function stepMonster(e, kris, i) {
+    e.ut += 1;
+    if (e.ut === 2) { e.ut = 0; return false; }
+
+    // room_board_1_sword rederives all of this every frame.
+    if (level.number === 1 && e.variant === 0) {
+      if (swordlv() > 1) { e.imageSpeed = 0.2; e.spd = 3; e.activeHitbox = true; }
+      else { e.imageSpeed = 0.1; e.spd = 2; }
+    }
+    if (swordlv() > 1) e.aggressive = true;
+    let chase = true;
+    if (!e.aggressive) { e.activeHitbox = false; chase = false; }
+
+    if (e.delay > 0) {
+      e.delay -= 1;
+      e.movetimer = 0; e.movecon = 0;
+      e.imageIndex += e.imageSpeed;
+      return false;
+    }
+
+    const telegraphing = e.variant === 1 && e.bulletimer > 22;
+
+    if (e.state === 'move' && e.hurttimer === 0) {
+      if (e.movecon === 0) {
+        if (kris.atdoorway || !chase) e.moveType = 0;
+        if (e.moveType === 1) {
+          // mp_grid_path to Kris's cell (his y biased +18, per the source).
+          const tx = Math.floor(kris.x / CELL), ty = Math.floor((kris.y + 18) / CELL);
+          const fx0 = Math.floor((e.x + 16) / CELL), fy0 = Math.floor((e.y + 16) / CELL);
+          const p = findPath(fx0, fy0, tx, ty);
+          if (p && p.length > 1) { e.path = p; e.pathI = 1; e.movecon = 1; }
+          else e.moveType = 0;
+        }
+        if (e.moveType === 0) {
+          e.movedir = Math.floor(rng() * 4);
+          // the repeat(4) blocked-direction rotation
+          for (let r = 0; r < 4; r++) {
+            if (e.movedir === 0 && boxHits(solids, e.x + 32, e.y)) e.movedir = 1;
+            if (e.movedir === 1 && boxHits(solids, e.x, e.y - 32)) e.movedir = 2;
+            if (e.movedir === 2 && boxHits(solids, e.x - 32, e.y)) e.movedir = 3;
+            if (e.movedir === 3 && boxHits(solids, e.x, e.y + 32)) e.movedir = 0;
+          }
+          e.movecon = 1;
+        }
+      }
+      if (e.movecon === 1) {
+        e.movetimer += 1;
+        if (e.moveType === 0 && !telegraphing) {
+          // The wander: spd 1px steps, bounce off walls and the enemy
+          // bounds, stop on the next cell boundary and re-check aggro.
+          let stop = false;
+          for (let n = 0; n < e.spd && !stop; n++) {
+            const [mx, my] = MOVE[e.movedir];
+            e.x += mx; e.y += my;
+            if (boxHits(solids, e.x, e.y)
+              || e.x < BOUNDS.x1 || e.x > BOUNDS.x2 || e.y < BOUNDS.y1 || e.y > BOUNDS.y2) {
+              e.x -= mx; e.y -= my;
+              e.movedir = e.movedir === 0 ? 2 : e.movedir === 1 ? 3 : e.movedir === 2 ? 0 : 1;
+            }
+            const onCell = (e.movedir === 0 || e.movedir === 2) ? e.x % 32 === 0 : e.y % 32 === 0;
+            if (onCell) {
+              e.movecon = 0; e.movetimer = 0; stop = true;
+              if (bboxDist(e, kris) < AGGRO && chase) e.moveType = 1;
+            }
+          }
+        } else if (e.moveType === 1) {
+          // The chase: walk the path at spd, re-path on the spd-keyed
+          // timer, give up at DEAGGRO.
+          e.isMovingTimer += 1;
+          if (telegraphing || e.delay > 0) e.isMovingTimer -= 1;
+          else if (e.path) {
+            let left = e.spd;
+            while (left > 0 && e.pathI < e.path.length) {
+              const t = e.path[e.pathI];
+              const txp = t.x * CELL, typ = t.y * CELL;
+              const ddx = Math.sign(txp - e.x), ddy = Math.sign(typ - e.y);
+              if (ddx === 0 && ddy === 0) { e.pathI += 1; continue; }
+              e.x += ddx; e.y += ddy;
+              left -= 1;
+            }
+          }
+          const limit = e.spd === 2 ? 16 : e.spd === 3 ? 12 : e.spd === 4 ? 9 : 5;
+          if (e.isMovingTimer >= limit) {
+            e.x = Math.floor((e.x + 16) / CELL) * CELL;
+            e.y = Math.floor((e.y + 16) / CELL) * CELL;
+            e.movecon = 0; e.movetimer = 0; e.isMovingTimer = 0;
+            e.path = null;
+            if (bboxDist(e, kris) >= DEAGGRO) e.moveType = 0;
+          }
+        }
+      }
+    }
+
+    swordCollide(e, kris);
+    if (hurtState(e, kris, i)) return true;
+
+    // The spear, type 1 only (obj_board_enemy_monster Step's bullet block).
+    if (e.variant === 1 && e.movecon === 1 && e.hurttimer === 0 && kris.leftdoorway && chase) {
+      e.bulletimer += 1;
+      if (e.bulletimer >= 30) {
+        e.bulletimer = [-20, -10, 0][Math.floor(rng() * 3)];
+        // The probe rectangles, in source order — the LAST that contains
+        // Kris wins: down, left, right, up.
+        let dir = e.movedir;
+        const k = kris;
+        const inRect = (x1, y1, x2, y2) =>
+          k.x + SIZE > Math.min(x1, x2) && k.x < Math.max(x1, x2)
+          && k.y + SIZE > Math.min(y1, y2) && k.y < Math.max(y1, y2);
+        if (inRect(e.x - 40, e.y, e.x + 72, e.y + 500)) dir = 3;
+        if (inRect(e.x + 32, e.y - 40, e.x - 500, e.y + 72)) dir = 2;
+        if (inRect(e.x, e.y - 40, e.x + 500, e.y + 72)) dir = 0;
+        if (inRect(e.x - 40, e.y + 32, e.x + 72, e.y - 500)) dir = 1;
+        const at = {
+          3: [e.x + 16, e.y + 48, 270], 2: [e.x - 22, e.y + 16, 180],
+          0: [e.x + 42, e.y + 16, 0], 1: [e.x + 16, e.y - 16, 90],
+        }[dir];
+        projectiles.push({
+          kind: 'spear', x: at[0], y: at[1], px: at[0], py: at[1],
+          angle: at[2], spd: 20, t: 0, ut: 0, damage: 1, active: true,
+          destroyOnHit: false,
+        });
+        snd('snd_board_splash');
+      }
+    }
+
+    e.imageIndex += e.imageSpeed;
+    return false;
+  }
+
+  /* ---------------- the flower (no updatetimer — full rate) ---------------- */
+
+  function stepFlower(e, kris, i) {
+    // Arming, per room.
+    if (level.number === 2) {
+      e.immunity = 0;
+      if (!e.activeHitbox && hasSword()) { e.activeHitbox = true; e.aggressive = true; }
+      if (!hasSword()) e.activeHitbox = false;
+    } else if (swordlv() === 1) {
+      e.activeHitbox = false;
+    } else {
+      e.activeHitbox = true; e.aggressive = true;
+    }
+
+    const animate = level.number !== 1 || swordlv() > 1;
+    if (animate) e.imageIndex += e.telegraph > 0 ? 1 / 3 : (Math.floor(rng() * 4) / 20);
+
+    if (kris.leftdoorway && e.aggressive) {
+      e.bubbletimer += 1;
+      if (e.bubbletimer === 16) e.telegraph = 14;             // telegraph art
+      if (e.telegraph > 0) e.telegraph -= 1;
+      if (e.hurttimer === 0 && e.bubbletimer >= 30) {
+        e.bubbletimer = [-30, -16, -60][Math.floor(rng() * 3)];
+        const cx = e.x + 16, cy = e.y + 16;
+        const ang = Math.atan2(-((kris.y + 16) - cy), (kris.x + 16) - cx) * 180 / Math.PI;
+        projectiles.push({
+          kind: 'pellet', x: cx, y: cy, px: cx, py: cy,
+          angle: ang, spd: 8, t: 0, ut: 0, damage: 1, active: false,
+          destroyOnHit: true,
+        });
+      }
+    }
+
+    swordCollide(e, kris);
+    return hurtState(e, kris, i);
+  }
+
+  /* ---------------- the bluefish ---------------- */
+
+  function stepBluefish(e, kris, i) {
+    e.ut += 1;
+    if (e.ut === 2) { e.ut = 0; return false; }
+    e.wallSet = fishSolids.length ? fishSolids : solids;
+
+    if (level.number === 2 && !e.aggressive && hasSword()) e.aggressive = true;
+
+    const myCellY = Math.floor((e.y + 16) / CELL), krisCellY = Math.floor((kris.y + 16) / CELL);
+    const myCellX = Math.floor((e.x + 16) / CELL), krisCellX = Math.floor((kris.x + 16) / CELL);
+
+    if (e.state === 'move' && e.hurttimer === 0) {
+      if (e.movecon === 0) {
+        if (e.dashcon === 1) {
+          // Recovery after a dash: ~15 acting frames.
+          e.dashtimer += 1;
+          if (e.dashtimer === 8) e.imageIndex = 0;
+          if (e.dashtimer > 15) { e.dashcon = 0; e.dashtimer = 0; }
+        } else {
+          if (e.moveType === 0) {
+            e.spd = 3;
+            let dashing = false;
+            // Row-aligned: needs aggressive. Column-aligned: needs
+            // swordlv > 1. The line test resolves to obj_nothing in the
+            // sword rooms — alignment alone is enough.
+            if (myCellY === krisCellY && !kris.atdoorway && e.aggressive) {
+              e.movedir = e.x < kris.x ? 0 : 2;
+              dashing = true;
+            } else if (myCellX === krisCellX && !kris.atdoorway && swordlv() > 1) {
+              e.movedir = e.y < kris.y ? 3 : 1;
+              dashing = true;
+            }
+            if (dashing) {
+              e.moveType = 1; e.spd = 15; e.imageIndex = 1;
+              snd('snd_wallclaw');
+            } else {
+              e.movedir = Math.floor(rng() * 4);
+              for (let r = 0; r < 4; r++) {
+                if (e.movedir === 0 && boxHits(e.wallSet, e.x + 32, e.y)) e.movedir = 1;
+                if (e.movedir === 1 && boxHits(e.wallSet, e.x, e.y - 32)) e.movedir = 2;
+                if (e.movedir === 2 && boxHits(e.wallSet, e.x - 32, e.y)) e.movedir = 3;
+                if (e.movedir === 3 && boxHits(e.wallSet, e.x, e.y + 32)) e.movedir = 0;
+              }
+            }
+          }
+          e.movecon = 1;
+        }
+      }
+      if (e.movecon === 1) {
+        let stop = false;
+        for (let n = 0; n < e.spd && !stop; n++) {
+          const [mx, my] = MOVE[e.movedir];
+          e.x += mx; e.y += my;
+          if (boxHits(e.wallSet, e.x, e.y)
+            || e.x < BOUNDS.x1 || e.x > BOUNDS.x2 || e.y < BOUNDS.y1 || e.y > BOUNDS.y2) {
+            if (e.moveType === 1) {
+              // A dash ends on the wall: snap to the cell and recover.
+              e.x -= mx; e.y -= my;
+              e.x = Math.round(e.x / 32) * 32; e.y = Math.round(e.y / 32) * 32;
+              e.movecon = 0; e.moveType = 0; e.dashcon = 1;
+              stop = true; break;
+            }
+            e.x -= mx; e.y -= my;
+            e.movedir = e.movedir === 0 ? 2 : e.movedir === 1 ? 3 : e.movedir === 2 ? 0 : 1;
+          }
+          const onCell = (e.movedir === 0 || e.movedir === 2) ? e.x % 32 === 0 : e.y % 32 === 0;
+          if (onCell) { e.movecon = 0; stop = true; }
+        }
+      }
+    }
+
+    swordCollide(e, kris);
+    return hurtState(e, kris, i);
+  }
+
+  /* ---------------- the lizard ---------------- */
+
+  function stepLizard(e, kris, i) {
+    e.ut += 1;
+    if (e.ut === 2) { e.ut = 0; return false; }
+    if (e.jumpedRecently > 0) e.jumpedRecently -= 1;
+    if (!e.aggressive && level.number === 2 && hasSword()) { e.aggressive = true; e.activeHitbox = true; }
+    const dontmove = !e.aggressive;
+
+    if (e.state === 'move' && !dontmove) {
+      if (e.movecon === 0 && e.hurttimer === 0) {
+        let rand;
+        if (e.lastattack === 4) rand = 1;
+        else if (e.lastattack === 1) rand = [1, 2, 3][Math.floor(rng() * 3)];
+        else if (e.lastattack === 2) rand = [1, 3][Math.floor(rng() * 2)];
+        else rand = [1, 2][Math.floor(rng() * 2)];
+        if (e.jumpedRecently > 0) rand = [1, 2][Math.floor(rng() * 2)];
+        if (!kris.leftdoorway && rand === 3) rand = 2;
+        if (rand === 3 && enemies.some((o) => o.kind === 'lizard' && o.movecon === 3)) rand = 1;
+        if (rand === 1) {
+          e.movedir = Math.floor(rng() * 4);
+          for (let r = 0; r < 4; r++) {
+            if (e.movedir === 0 && boxHits(solids, e.x + 32, e.y)) e.movedir = 1;
+            if (e.movedir === 1 && boxHits(solids, e.x, e.y - 32)) e.movedir = 2;
+            if (e.movedir === 2 && boxHits(solids, e.x - 32, e.y)) e.movedir = 3;
+            if (e.movedir === 3 && boxHits(solids, e.x, e.y + 32)) e.movedir = 0;
+          }
+        }
+        if (rand === 3) {
+          // The jump: pick a free cell in the 11x3 grid at (128,128), red
+          // reticle, arc over ~32 acting frames.
+          const cells = [];
+          for (let cx = 0; cx < 11; cx++) {
+            for (let cy = 0; cy < 3; cy++) {
+              const wx = 128 + cx * 32, wy = 128 + cy * 32;
+              if (!boxHits(solids, wx, wy, 1, 1)) cells.push([wx, wy]);
+            }
+          }
+          if (cells.length) {
+            const [tx, ty] = cells[Math.floor(rng() * cells.length)];
+            e.jump = { sx: e.x, sy: e.y, tx, ty, t: 0 };
+            for (const o of enemies) if (o.kind === 'lizard') o.jumpedRecently = 50;
+            snd('snd_board_throw');
+          } else rand = 1;
+        }
+        e.movecon = rand;
+        e.lastattack = rand;
+        e.movetimer = 0;
+      }
+      if (e.movecon === 1 && e.hurttimer === 0) {
+        e.movetimer += 1;
+        let stop = false;
+        for (let n = 0; n < e.spd && !stop; n++) {
+          const [mx, my] = MOVE[e.movedir];
+          e.x += mx; e.y += my;
+          if (e.movedir === 0) e.faceRight = true;
+          if (e.movedir === 2) e.faceRight = false;
+          if (boxHits(solids, e.x, e.y)
+            || e.x < BOUNDS.x1 || e.x > BOUNDS.x2 || e.y < BOUNDS.y1 || e.y > BOUNDS.y2) {
+            e.x -= mx; e.y -= my;
+            e.movedir = e.movedir === 0 ? 2 : e.movedir === 1 ? 3 : e.movedir === 2 ? 0 : 1;
+          }
+          const onCell = (e.movedir === 0 || e.movedir === 2) ? e.x % 32 === 0 : e.y % 32 === 0;
+          if (onCell) { e.movecon = 0; e.movetimer = 0; stop = true; }
+        }
+      }
+      if (e.movecon === 2 && e.hurttimer === 0) {
+        // The idle shuffle: face-flips for 15 acting frames.
+        e.movetimer += 1;
+        if (e.movetimer % 6 === 0) e.faceRight = rng() < 0.5;
+        if (e.movetimer === 15) { e.movecon = 0; e.movetimer = 0; }
+      }
+      if (e.movecon === 3 && e.jump) {
+        e.jump.t += 2;
+        const t = e.jump.t;
+        e.faceRight = e.jump.sx < e.jump.tx;
+        if (t <= 60) {
+          const f = t / 64;
+          e.x = e.jump.sx + (e.jump.tx - e.jump.sx) * f;
+          e.y = e.jump.sy + (e.jump.ty - e.jump.sy) * f
+            + (-15 + Math.sin(t / 19) * 50 * -1);
+        }
+        if (t >= 62) {
+          snd('snd_bump');
+          e.x = e.jump.tx; e.y = e.jump.ty;
+          e.jump = null; e.movecon = 0; e.movetimer = 0;
+          for (const o of enemies) if (o.kind === 'lizard') o.jumpedRecently = 50;
+        }
+      }
+    }
+
+    swordCollide(e, kris);
+    if (hurtState(e, kris, i)) return true;
+
+    // A hit knocks it out of whatever it was doing (except mid-jump).
+    if (e.hurttimer > 0 && e.movecon !== 0 && e.movecon !== 3) {
+      e.movetimer = 0; e.movecon = 0; e.jump = null;
+    }
+
+    // The pellet: type 0, at rest, player on screen.
+    if (e.hurttimer === 0 && e.movecon !== 3 && e.variant === 0 && kris.leftdoorway && !dontmove) {
+      e.bulletimer += 1;
+      if (e.bulletimer >= 28) {
+        e.faceRight = e.x < kris.x;
+        const bx = e.faceRight ? e.x + 24 : e.x + 8, by = e.y + 7;
+        const ang = Math.atan2(-((kris.y + 16) - by), (kris.x + 16) - bx) * 180 / Math.PI;
+        projectiles.push({
+          kind: 'pellet', x: bx, y: by, px: bx, py: by,
+          angle: ang, spd: 8, t: 0, ut: 0, damage: 1, active: false,
+          destroyOnHit: true,
+        });
+        e.bulletimer = [-50, -25, 0][Math.floor(rng() * 3)];
+      }
+    } else if (!(e.hurttimer === 0 && e.movecon !== 3)) {
+      e.bulletimer = 0;
+    }
+
+    e.imageIndex += 0.1;
+    return false;
+  }
+
+  /* ---------------- the bluebird ---------------- */
+
+  const BIRD_SPOTS = [[448, 256], [160, 256], [160, 96], [448, 96], [256, 160], [352, 192]];
+
+  function stepBluebird(e, kris, i) {
+    e.ut += 1;
+    if (e.ut === 2) e.ut = 0;
+    else return false;                    // inverted: acts every 2nd frame
+
+    // Only hittable near the ground (yoffset > -15).
+    if (e.yoffset > -15) swordCollide(e, kris);
+    if (hurtState(e, kris, i)) return true;
+
+    if (e.movetimer < 0) {
+      // Grounded: crouch, hop, and pick the next spot at -1.
+      const t = e.movetimer;
+      if (t > -50 && t < -30) { e.imageIndex += (t + 30) / -20 * 0.2 + 0.2; e.yoffset = Math.round(((t + 30) / -20) * -24 / 2) * 2; }
+      if (t >= -30 && t < -20) e.imageIndex = 1;
+      if (t > -20 && t < 0) e.imageIndex += 0.3;
+      if (t > -10 && t < 0) e.yoffset = Math.round(((t / -10) * -24) / 2) * 2 * -1 - 24 || 0;
+      if (t >= -10) e.yoffset = Math.round((-24 * (t / -10)) / 2) * 2;
+      if (t === -1) {
+        e.startx = e.x; e.starty = e.y;
+        let rand = Math.floor(rng() * 6);
+        if (rand === e.randprev) rand = (rand + 1) % 6;
+        e.randprev = rand;
+        [e.destx, e.desty] = BIRD_SPOTS[rand];
+        e.distance = Math.hypot(e.destx - e.startx, e.desty - e.starty) / 5.3;
+        e.con = 0; e.movespd = 0;
+      }
+      e.movetimer += 1;
+    } else {
+      if (e.con === 0 && e.movespd < 2) e.movespd += 0.1;
+      if (e.con === 1 && e.movespd > 0.3) e.movespd -= 0.1;
+      if (e.movetimer >= e.distance - 11 * e.movespd) e.con = 1;
+      e.movetimer += e.movespd;
+      e.imageIndex += 1;
+      e.yoffset = -24;
+      if (e.movetimer > e.distance) e.movetimer = e.distance;
+      const f = e.distance > 0 ? e.movetimer / e.distance : 1;
+      e.x = e.startx + (e.destx - e.startx) * f;
+      e.y = e.starty + (e.desty - e.starty) * f;
+      if (e.movetimer >= e.distance) {
+        e.movetimer = -50; e.con = 0; e.movespd = 0; e.imageIndex = 0; e.yoffset = 0;
+      }
+    }
+    return false;
+  }
+
+  /* ---------------- projectiles ---------------- */
+
+  function stepProjectiles() {
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i];
+      p.t += 1;
+      if (p.kind === 'pellet' && p.t === 5) p.active = true;
+      if ((p.kind === 'pellet' && p.t >= 160) || (p.kind === 'spear' && p.t >= 30)) {
+        projectiles.splice(i, 1); continue;
+      }
+      p.ut += 1;
+      if (p.ut === 3) p.ut = 0;
+      else continue;                     // moves every third frame
+      p.px = p.x; p.py = p.y;
+      const rad = p.angle * Math.PI / 180;
+      p.x += Math.cos(rad) * p.spd;
+      p.y -= Math.sin(rad) * p.spd;      // GM y is inverted in lengthdir
+    }
+  }
+
+  /* ---------------- the public surface ---------------- */
 
   function step(kris) {
     for (let i = enemies.length - 1; i >= 0; i--) {
       const e = enemies[i];
       e.px = e.x; e.py = e.y;
-
-      // THE AGGRESSION RULE, from the monster's Step, re-derived every
-      // frame: swordlv > 1 forces it on, and without it there is neither a
-      // hitbox nor a chase.
-      if (e.chases && swordlv() > 1) e.aggressive = true;
-
-      // And in level 1 the same block re-derives the monster's speed from
-      // the sword every frame, so an enemy already on the board speeds up
-      // the moment you level:
-      //     if (swordlv > 1)  { image_speed = 0.2; spd = 3; active_hitbox = true; }
-      //     if (swordlv == 1) { image_speed = 0.1; spd = 2; }
-      if (e.kind === 'monster' && level.number === 1 && e.variant === null) {
-        e.spd = swordlv() > 1 ? 3 : 2;
+      if (e.kind === 'monster') stepMonster(e, kris, i);
+      else if (e.kind === 'flower') stepFlower(e, kris, i);
+      else if (e.kind === 'bluefish') stepBluefish(e, kris, i);
+      else if (e.kind === 'lizard') stepLizard(e, kris, i);
+      else if (e.kind === 'bluebird') stepBluebird(e, kris, i);
+    }
+    stepProjectiles();
+    for (let i = fx.length - 1; i >= 0; i--) {
+      const f = fx[i];
+      f.t += 0.3;
+      if (f.t >= 3) {
+        if (f.candy) onCandy(f.x - 16, f.y - 16);
+        fx.splice(i, 1);
       }
-
-      // scr_board_enemy_hurt_state. Death lands at hurttimer 9 — the frame
-      // AFTER the hit, not on it.
-      if (e.hurttimer > 0) {
-        e.hurttimer -= 1;
-        if (e.hurttimer === 9 && e.hp <= 0) {
-          enemies.splice(i, 1);
-          // The spawner goes with it, so a cleared screen stays cleared.
-          killedSpawners.add(e.spawnerIndex);
-          onKill(e);                       // kris.xp += xp_given
-          continue;
-        }
-        // Knocked back up to 20px a frame while hurttimer > 6, one pixel at
-        // a time, stopping at the first wall.
-        if (e.hurttimer > 6 && e.hitdir >= 0) {
-          const [kx, ky] = HITDIRS[e.hitdir];
-          for (let n = 0; n < KNOCKBACK_PX; n++) {
-            if (blocked(e.x + kx, e.y + ky)) break;
-            e.x += kx; e.y += ky;
-          }
-        }
-        clamp(e);
-        e.imageIndex += 0.1;
-        continue;                          // a hurt enemy does not act
-      }
-
-      // `if (delay > 0) delay--;` and every movement branch is gated on
-      // `delay == 0` — the monster's Step. This is the stun it takes for
-      // having hit you.
-      if (e.delay > 0) { e.delay -= 1; e.imageIndex += 0.1; continue; }
-
-      // The contact hitbox is offset (+16,+16) from the enemy's own corner.
-      const dx = (kris.x + 16) - (e.x + 16);
-      const dy = (kris.y + 16) - (e.y + 16);
-      const dist = Math.hypot(dx, dy);
-      // No chase without aggression — that is the same flag the hitbox
-      // hangs off. Enter the chase inside 90, leave it at 70.
-      e.angry = e.chases && e.aggressive && (e.angry ? dist < DEAGGRO : dist < AGGRO);
-
-      if (e.angry) {
-        // Chase: step toward Kris on whichever axis is furthest, refusing
-        // any step that would put the enemy inside a wall.
-        const stepX = Math.sign(dx) * e.spd;
-        const stepY = Math.sign(dy) * e.spd;
-        if (Math.abs(dx) > Math.abs(dy)) {
-          if (stepX && !blocked(e.x + stepX, e.y)) e.x += stepX;
-          else if (stepY && !blocked(e.x, e.y + stepY)) e.y += stepY;
-        } else {
-          if (stepY && !blocked(e.x, e.y + stepY)) e.y += stepY;
-          else if (stepX && !blocked(e.x + stepX, e.y)) e.x += stepX;
-        }
-      } else if (e.chases) {
-        // Idle: `movedir = choose(0,1,2,3)` and walk it for a while.
-        e.movetimer -= 1;
-        if (e.movetimer <= 0) {
-          e.movedir = Math.floor(rng() * 4);
-          e.movetimer = 20 + Math.floor(rng() * 40);
-        }
-        const [mx, my] = DIRS[e.movedir];
-        const nx = e.x + mx * e.spd, ny = e.y + my * e.spd;
-        if (!blocked(nx, ny)) { e.x = nx; e.y = ny; }
-        else e.movetimer = 0;
-      }
-
-      clamp(e);
-      // image_speed 0.1 idle, 0.2 once it has noticed you.
-      e.imageIndex += e.angry ? 0.2 : 0.1;
     }
   }
 
-  /** hitdir 0/1/2/3 = down/right/up/left, matching kris.facing. */
-  const HITDIRS = [[0, 1], [1, 0], [0, -1], [-1, 0]];
-
-  function clamp(e) {
-    e.x = Math.min(ENEMY_BOUNDS.x2, Math.max(ENEMY_BOUNDS.x1, e.x));
-    e.y = Math.min(ENEMY_BOUNDS.y2, Math.max(ENEMY_BOUNDS.y1, e.y));
-  }
-
-  /**
-   * scr_board_enemy_sword_collision. `box` is the sword hitbox's rect in
-   * world space; `facing` becomes the enemy's knockback direction.
-   *
-   * Returns what happened so the caller can play the right sound: 'hit',
-   * 'clang' (the blade rings off — either swordlv is below the enemy's
-   * sword_immunity_lv, or it is the gray monster), or null.
-   */
-  function swordHit(box, facing, lv) {
-    let result = null;
-    for (const e of enemies) {
-      if (e.hurttimer !== 0) continue;
-      if (!(box.x < e.x + ENEMY_SIZE && box.x + box.w > e.x
-         && box.y < e.y + ENEMY_SIZE && box.y + box.h > e.y)) continue;
-
-      if (lv < e.immunity) {
-        // snd_board_sword_metal, and nothing else happens.
-        e.hurttimer = HURTTIME;
-        e.hitdir = -1;
-        result = result === 'hit' ? 'hit' : 'clang';
-      } else if (e.blend === 'gray') {
-        e.hurttimer = HURTTIME;
-        e.hitdir = -1;
-        result = result === 'hit' ? 'hit' : 'clang';
-      } else {
-        e.hurttimer = HURTTIME;
-        e.hitdir = facing;
-        e.angry = false;               // path_end(); the chase drops
-        if (e.hp !== 999) e.hp -= 1;
-        result = 'hit';
-      }
-    }
-    return result;
-  }
-
-  /**
-   * `instance_place(x, y, obj_board_hazard)` — but a hazard whose
-   * `active_hitbox` is false is not a hazard at all, which is the whole of
-   * why level 1 cannot hurt you.
-   */
+  /** The hazard Kris is touching, if any: enemy contact boxes first, then
+   *  live projectiles. Returns {damage, px, py, projectile?} or null. */
   function touching(kris) {
-    return enemies.find((e) => {
-      // active_hitbox: off unless aggressive, and off while hurt.
-      if (!e.aggressive || e.hurttimer > 0) return false;
-      const hx = e.x + HITBOX_INSET, hy = e.y + HITBOX_INSET;
-      return kris.x < hx + HITBOX_SIZE && kris.x + ENEMY_SIZE > hx
-          && kris.y < hy + HITBOX_SIZE && kris.y + ENEMY_SIZE > hy;
-    }) ?? null;
+    for (const e of enemies) {
+      if (!e.activeHitbox || e.hurttimer > 0) continue;
+      if (e.kind === 'bluebird' && e.yoffset <= -15) continue;
+      const half = (HITBOX[e.kind] ?? 20) / 2;
+      const hx = e.x + 16 - half, hy = e.y + 16 - half, hs = half * 2;
+      if (kris.x < hx + hs && kris.x + SIZE > hx && kris.y < hy + hs && kris.y + SIZE > hy) return e;
+    }
+    for (let i = projectiles.length - 1; i >= 0; i--) {
+      const p = projectiles[i];
+      if (!p.active) continue;
+      const s = p.kind === 'spear' ? 24 : 12;
+      if (kris.x < p.x + s / 2 && kris.x + SIZE > p.x - s / 2
+        && kris.y < p.y + s / 2 && kris.y + SIZE > p.y - s / 2) {
+        if (p.destroyOnHit) projectiles.splice(i, 1);
+        return p;
+      }
+    }
+    return null;
   }
 
-  /**
-   * The hit's recoil, from the player's Step:
-   *
-   *     with (instance_nearest(x + 16, y + 16, obj_board_enemy_monster))
-   *         { ... delay = 10; if (type == 2) delay = 30; }
-   *
-   * Note it stuns the monster NEAREST KRIS, which is not necessarily the one
-   * that touched him — that is the game's own wording, kept.
-   */
+  /** The post-hit stun: the game stuns the monster NEAREST Kris. */
   function stun(kris) {
     let best = null, bestd = Infinity;
     for (const e of enemies) {
@@ -321,36 +771,82 @@ export function createEnemies(level, opts = {}) {
       const d = Math.hypot((kris.x + 16) - (e.x + 16), (kris.y + 16) - (e.y + 16));
       if (d < bestd) { bestd = d; best = e; }
     }
-    if (best) { best.delay = best.variant === 2 ? 30 : 10; best.movetimer = 0; }
+    if (best) { best.delay = best.variant === 2 ? 30 : 10; best.movetimer = 0; best.movecon = 0; }
   }
 
-  function draw(ctx, sprites) {
-    for (const e of enemies) {
-      // spr_board_monster_hurt while the hit is landing.
-      const set = (e.hurttimer > 0 && sprites.hurt && sprites.hurt.length)
-        ? sprites.hurt
-        : (e.angry ? sprites.angry : sprites.idle);
-      if (!set || !set.length) continue;
-      const f = set[Math.floor(e.imageIndex) % set.length];
-      ctx.drawImage(f, Math.round(e.x), Math.round(e.y),
-        f.width * SCALE, f.height * SCALE);
-    }
-  }
-
-  /** Back to an empty board — the death event destroys every enemy, and a
-   *  restarted level re-fires the spawners from scratch. */
   function reset() {
-    enemies.length = 0;
-    spawned.clear();
+    clearScreen();
     killedSpawners.clear();
   }
 
-  return { enemies, spawnVisible, translate, step, touching, stun, swordHit, draw, reset,
-           get violence() { return violence; },
-           set violence(v) {
-             // active_hitbox is re-read from `aggressive` every time the
-             // controller's flag moves; enemies already standing pick it up.
-             violence = !!v;
-           },
-           get count() { return enemies.length; } };
+  /* ---------------- drawing ---------------- */
+
+  function draw(g, S) {
+    // S = the sprite atlas: S.frame(name, index) -> canvas/image or null.
+    for (const p of projectiles) {
+      const name = p.kind === 'spear' ? 'spr_board_spear' : 'spr_board_smallbullet';
+      const f = S.frame(name, Math.floor(p.t / 3) % 2);
+      if (!f) continue;
+      const scale = 2;
+      g.save();
+      g.translate(Math.round(p.x), Math.round(p.y));
+      if (p.kind === 'spear') g.rotate(-p.angle * Math.PI / 180);
+      g.drawImage(f, -f.width, -f.height, f.width * scale, f.height * scale);
+      g.restore();
+    }
+    for (const e of enemies) {
+      let name, flip = false, tint = null;
+      if (e.kind === 'monster') {
+        // The angry art is the spear telegraph, not the chase.
+        const angry = e.variant === 1 && e.bulletimer > 22;
+        name = angry ? 'spr_board_monster_angery_outline_docile' : 'spr_board_monster_outline_docile';
+        if (e.blend === 'yellow') tint = '#ffff00';
+        if (e.blend === 'orange') tint = '#ffa500';
+        if (e.blend === 'gray') tint = '#808080';
+      } else if (e.kind === 'flower') {
+        name = e.telegraph > 0 ? 'spr_board_flower_telegraph_alt' : 'spr_board_flower_alt';
+        if (level.number === 2) name = e.telegraph > 0 ? 'spr_board_flower_telegraph' : 'spr_board_flower';
+      } else if (e.kind === 'bluefish') {
+        name = ['spr_board_bluefish_r', 'spr_board_bluefish_u', 'spr_board_bluefish_l', 'spr_board_bluefish_d'][e.movedir];
+      } else if (e.kind === 'lizard') {
+        name = e.faceRight ? 'spr_board_lizard_r' : 'spr_board_lizard_l';
+      } else if (e.kind === 'bluebird') {
+        const sh = S.frame('spr_bluebird_shadow', 0);
+        if (sh) g.drawImage(sh, Math.round(e.x), Math.round(e.y) + 24, sh.width * 2, sh.height * 2);
+        name = 'spr_board_blue_bird';
+      }
+      const meta = S.meta(name);
+      const frames = meta ? meta.frames : 2;
+      let img = S.frame(name, Math.floor(e.imageIndex) % frames);
+      if (!img) continue;
+      if (tint) img = S.tinted(img, tint);
+      const dy = e.kind === 'bluebird' ? e.yoffset : 0;
+      g.drawImage(img, Math.round(e.x) - (meta ? meta.ox * 2 : 0),
+        Math.round(e.y) + dy - (meta ? meta.oy * 2 : 0),
+        img.width * 2, img.height * 2);
+      // The hurt overlay: hurt_sprite every second hurt frame.
+      if (e.hurttimer > 0 && e.hurttimer % 2 === 0) {
+        const hurtName = {
+          monster: 'spr_board_monster_hurt', flower: 'spr_board_flower_hurt',
+          bluefish: 'spr_board_monster_hurt',
+          lizard: e.faceRight ? 'spr_board_lizard_r_hurt' : 'spr_board_lizard_l_hurt',
+          bluebird: 'spr_board_blue_bird_hurt',
+        }[e.kind];
+        const hf = S.frame(hurtName, Math.floor(e.imageIndex) % 2);
+        if (hf) g.drawImage(hf, Math.round(e.x), Math.round(e.y) + dy, hf.width * 2, hf.height * 2);
+      }
+    }
+    for (const f of fx) {
+      const img = S.frame('spr_board_enemydefeatsplash', Math.floor(f.t));
+      if (img) g.drawImage(img, Math.round(f.x) - 16, Math.round(f.y) - 16, 32, 32);
+    }
+  }
+
+  return {
+    enemies, projectiles,
+    spawnVisible, clearScreen, translate, step, touching, stun, draw, reset,
+    get violence() { return violence; },
+    set violence(v) { violence = !!v; },
+    get count() { return enemies.length; },
+  };
 }
