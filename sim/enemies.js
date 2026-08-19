@@ -809,6 +809,11 @@ export function createEnemies(level, opts = {}) {
   }
 
   function stepBlackDeer(e, kris, i) {
+    if (e.playerControlled) {
+      // the host drives it; hazards still land (hp 1 hands control back)
+      if (hurtState(e, kris, i)) return true;
+      return false;
+    }
     e.ut += 1;
     if (e.ut === 2) { e.ut = 0; return false; }
     swordCollide(e, kris);               // hp 999: the blade only stuns it

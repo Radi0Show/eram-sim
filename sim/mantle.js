@@ -55,6 +55,7 @@ export function createMantle(host) {
   const groundfires = [];  // {x,y,t}
   const summons = [];      // obj___ chasers {x,y,t,hurt,alive}
   const particles = [];
+  const clones = [];       // phase 4's diving copies
   let outro = null;
 
   const PATHX = 304, PATHY = 128;      // obj_shadow_mantle_path's spot
@@ -90,6 +91,7 @@ export function createMantle(host) {
     boss.won = true;
     bombs.length = 0; clouds.length = 0; bullets.length = 0;
     fires.length = 0; groundfires.length = 0; summons.length = 0;
+    clones.length = 0;
     fireCtl = null;
     outro = { t: 0, phase: 0, y: boss.y };
     host.audio?.stopMusic();
@@ -371,8 +373,20 @@ export function createMantle(host) {
         boss.fric = 0; boss.grav = 0.5; boss.speed = 10;
       }
       if (boss.dashTimer >= 30 && boss.dashTimer % 2 === 0) {
-        boss.grav += boss.hp >= 5 ? 0.03 : 0.03;
+        boss.grav += 0.03;
         groundfires.push({ x: boss.x + 16, y: boss.y + 16, t: 0 });
+      }
+      // Phase 4's clone rain: copies of him dive from the top at
+      // dashtimer 44 and 58, trailing their own groundfire.
+      if (boss.dashCount > 0 && boss.hp <= 4) {
+        if (boss.dashTimer === 44 || boss.dashTimer === 58) {
+          const cx = 160 + irandom(9) * 32;
+          const aim = 170 + irandom(295);
+          let d = Math.atan2(-(270 - 36), aim - cx) * 180 / Math.PI;
+          if (d > 0) d -= 360;
+          clones.push({ x: cx, y: 20, dir: d, spd: 2, grav: 0.24, t: 0 });
+          snd('snd_board_mantle_dash_slow', { pitch: 0.95 + Math.random() * 0.1 });
+        }
       }
       if (boss.y > 384 || boss.y < -36 || boss.x < 160 || boss.x > 512) {
         boss.dashTimer = 0; boss.dashCon = 1;
@@ -557,6 +571,19 @@ export function createMantle(host) {
       particles[i].t += 1;
       if (particles[i].t > 20) particles.splice(i, 1);
     }
+    for (let i = clones.length - 1; i >= 0; i--) {
+      const c = clones[i];
+      c.t += 1;
+      const rad = c.dir * Math.PI / 180;
+      c.x += Math.cos(rad) * c.spd;
+      c.y -= Math.sin(rad) * c.spd;
+      c.spd += c.grav;
+      if (c.t >= 30 && c.t % 2 === 0) {
+        c.grav += 0.03;
+        groundfires.push({ x: c.x + 16, y: c.y + 16, t: 0 });
+      }
+      if (c.y > 400 || c.y < -110 || c.x < 150 || c.x > 522) clones.splice(i, 1);
+    }
   }
 
   /* ---------------- the summons (obj___) ---------------- */
@@ -617,6 +644,11 @@ export function createMantle(host) {
       if (!f.launched && fireCtl) continue;        // arming flames are visual
       if (k.x < f.x + 14 && k.x + 32 > f.x - 14 && k.y < f.y + 14 && k.y + 32 > f.y - 14) {
         return { damage: 1, px: f.x, py: f.y };
+      }
+    }
+    for (const c of clones) {
+      if (k.x < c.x + 32 && k.x + 32 > c.x && k.y < c.y + 32 && k.y + 32 > c.y) {
+        return { damage: 2, px: c.x, py: c.y };
       }
     }
     for (const s of summons) {
@@ -684,6 +716,10 @@ export function createMantle(host) {
     for (const s of summons) {
       draw2('spr_shadow_mantle_idle', s.t / 3, s.x, s.y, s.t < 20 ? s.t / 20 : 1,
         s.hurt > 0 ? '#ffffff' : '#404040');
+    }
+    for (const c of clones) {
+      draw2('spr_board_imonfire', Math.floor(c.t / 4) % 2, c.x - 16, c.y - 32, 1, '#ff0000');
+      draw2('spr_shadow_mantle_dash', c.t / 2, c.x, c.y);
     }
     for (const p of particles) draw2('spr_shadow_mantle_fire', p.t, p.x - 8, p.y - 8, 1 - p.t / 20);
 

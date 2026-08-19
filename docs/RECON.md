@@ -544,9 +544,32 @@ built from fresh room dumps:
 - obj___ summons chase in a straight line (the arena is open; the game
   paths on the same grid).
 
+## Round 5: the chest is the ending, the deer is playable, the clones rain
+
+- **Level 1's true ending is the CHEST, not the tease.** The shadowtease
+  is a mid-level encounter (flag 1008): the Mantle flees, "See you soon."
+  hangs there, and control RETURNS. The fourth tree-loop entry spawns
+  obj_board_swordroute_icekey (the chest) at cell (choose(4,5),
+  choose(2,3)) of the canonical screen with its #FF9B00 colour changer;
+  opening it runs the cinematic — the four-corner static at quarter alpha
+  (screencolor #ADC7EB), the #1E76F0 flood, black, snd_link_get_key,
+  flag 1055 = 1 — and in the game the TV turns off. The sequence's inner
+  dialogue writer is not reproduced (labelled).
+- **The switch puzzle transfers control to the deer.** Both plates pressed
+  at once (one under Kris, one under the black deer) fires the real
+  mechanic: obj_mainchara_board.controlled = false, the deer becomes the
+  player at wspeed 2, and its hp is set to 1 so one hazard touch hands
+  control back. The deer's staged destination (the shelter approach's
+  set pieces) is not carried; Z as the deer also returns control so the
+  mechanic cannot softlock (labelled).
+- **Phase 4's clone rain**: copies dive from the top at dashtimer 44 and
+  58 (aimed at 170 + irandom(295), gravity 0.24 growing 0.03 per 2 frames,
+  their own groundfire trails and contact damage 2), exactly the clone's
+  own Step.
+
 ## Still to do, if ever
 
-1. The tree-loop ghost helpers and the chest cinematic (level 1's key).
+1. The tree-loop ghost helpers (the repeated Kris silhouettes).
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
 

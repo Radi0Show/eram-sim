@@ -302,6 +302,8 @@ export async function runBoard(canvas, level, opts = {}) {
     // IN `solids` and translate with them.
     for (const c of cactus) { c.x += dx; c.y += dy; }
     for (const f of ferns) { f.x += dx; f.y += dy; }
+    for (const sw of switches) { sw.x += dx; sw.y += dy; }
+    if (chest && chest.x !== undefined) { chest.x += dx; chest.y += dy; }
     for (const b of boats) { b.x += dx; b.y += dy; }
     if (pickup) { pickup.x += dx; pickup.y += dy; }
     if (tenna) { tenna.marker.x += dx; tenna.marker.y += dy; }
@@ -323,6 +325,18 @@ export async function runBoard(canvas, level, opts = {}) {
         && kris.y < w.y + w.h && kris.y + KRIS_SIZE > w.y);
     }
     trail.length = 0;                 // followers snap to Kris on arrival
+    if (chest && !chest.taken) {
+      chest.x = world.x + chest.rx;
+      chest.y = world.y + chest.ry;
+      for (let i = trees.length - 1; i >= 0; i--) {
+        const t = trees[i];
+        if (t.x < chest.x + 32 && t.x + 32 > chest.x && t.y < chest.y + 32 && t.y + 32 > chest.y) {
+          const si = solids.indexOf(t.solid);
+          if (si >= 0) solids.splice(si, 1);
+          trees.splice(i, 1);
+        }
+      }
+    }
     // obj_board_swordroute_treehelper's Step_2: any tree touching Kris is
     // destroyed — the game's own guard against landing inside the forest.
     for (let i = trees.length - 1; i >= 0; i--) {
@@ -788,6 +802,12 @@ export async function runBoard(canvas, level, opts = {}) {
       }
       return;
     }
+    for (const sw of switches) {
+      if (onScreen(sw.x, sw.y)) drawSprite('spr_board_dungeon3_switch', sw.pressed || sw.used ? 1 : 0, sw.x, sw.y);
+    }
+    if (chest && !chest.taken && onScreen(chest.x, chest.y)) {
+      drawSprite('spr_board_chest', 0, chest.x, chest.y);
+    }
     if (pickup && !pickup.taken && !kris.sword) {
       const near = kris.x < pickup.x + 32 && kris.x + KRIS_SIZE > pickup.x - 8
         && kris.y < pickup.y + 32 && kris.y + KRIS_SIZE > pickup.y - 8;
@@ -837,12 +857,67 @@ export async function runBoard(canvas, level, opts = {}) {
      driven here. */
   let tease = null;                    // the Mantle fleeing, then the text
   let doorSeq = null;                  // the ice door opening
+  let chest = null;                    // level 1's icekey chest (after 4 loops)
+  let keySeq = null;                   // the chest cinematic
+  /* Level 4's switch puzzle (obj_board_dungeon3_switch): two plates on one
+     screen; Kris on one, the black deer on the other, both at once — then
+     CONTROL TRANSFERS TO THE DEER (obj_mainchara_board.controlled = false,
+     the deer's abouttoregaincontrol = true, its hp set to 1 so one hazard
+     touch hands control back). Door walls seal the screen edge while you
+     are the deer. The deer's destination beyond the opened wall is staged
+     by set pieces this sim does not carry — Z as the deer also returns
+     control, so the mechanic cannot softlock (labelled). */
+  const switches = events.filter((e) => e.obj === 'dungeon3_switch')
+    .map((e) => ({ ...e, pressed: false, used: false }));
+  let deerCtl = null;
   const tenna = room.number === 2
     ? { marker: { x: 3904 + moveX, y: 1440 + moveY }, con: 0, kx: 0, ky: 0 }
     : null;
   let storeShown = false;
 
   function stepSetPieces() {
+    if (deerCtl) {
+      const d = deerCtl.deer;
+      if (!foes.enemies.includes(d) || d.hp <= 0) {
+        // the deer fell — control returns
+        deerCtl = null;
+        kris.canfreemove = true;
+      } else {
+        // drive the deer at wspeed 2, Kris's own movement rules
+        const spd = 2;
+        let dx = 0, dy = 0;
+        if (held.has('r')) dx = spd;
+        if (held.has('l')) dx = -spd;
+        if (held.has('d')) dy = spd;
+        if (held.has('u')) dy = -spd;
+        const free = (x, y) => !solids.some((sl) =>
+          x < sl.x + sl.w && x + 32 > sl.x && y < sl.y + sl.h && y + 32 > sl.y);
+        if (dx && free(d.x + dx, d.y)) d.x += dx;
+        if (dy && free(d.x, d.y + dy)) d.y += dy;
+        d.x = Math.min(BOUND_R, Math.max(BOUND_L, d.x));
+        d.y = Math.min(BOUND_D, Math.max(BOUND_U, d.y));
+        if (press1) {
+          press1 = false;
+          d.playerControlled = false;
+          deerCtl = null;
+          kris.canfreemove = true;
+          beginOutro('deer');
+        }
+        return;
+      }
+    }
+    if (keySeq) {
+      keySeq.t += 1;
+      if (keySeq.t === 30) snd('snd_noise', { volume: 0.8, pitch: 0.5 });
+      if (keySeq.t === 90) retint('#ADC7EB', 5);
+      if (keySeq.t === 150) retint('#1E76F0', 5);
+      if (keySeq.t === 210) { retint('#000000', 5); snd('snd_link_get_key'); }
+      if (keySeq.t >= 330) {
+        keySeq = null;
+        beginOutro('key');
+      }
+      return;
+    }
     if (tease) {
       tease.t += 1;
       if (tease.t < 48) {
@@ -855,9 +930,15 @@ export async function runBoard(canvas, level, opts = {}) {
         shopwriter.show('See you soon.', { color: '#000000', y: 64 + 64 + 12 });
       }
       if (tease.t >= 200) {
+        // The tease is a mid-level encounter (flag 1008), not the ending —
+        // the Mantle is gone, the words hang there, and control returns.
+        // Level 1 truly ends at the CHEST in the tree loop.
+        kris.canfreemove = true;
+        tease.done = true;
+      }
+      if (tease.done && tease.t >= 320) {
         shopwriter.clear();
         tease = null;
-        beginOutro('shadowtease');
       }
       return;
     }
@@ -1006,6 +1087,15 @@ export async function runBoard(canvas, level, opts = {}) {
         treeLoops += 1;
         const plx = kris.x - PANE_X;
         const ply = kris.y - PANE_Y;
+        if (treeLoops === 4 && !chest) {
+          // The fourth entry spawns the CHEST on the canonical screen —
+          // obj_board_swordroute_icekey at cell (choose(4,5), choose(2,3)),
+          // its colour changer forced to #FF9B00.
+          const tx = 4 + Math.floor(Math.random() * 2);
+          const ty = 2 + Math.floor(Math.random() * 2);
+          chest = { rx: 1280 + tx * 32, ry: 1088 + ty * 32, taken: false };
+          retint('#FF9B00', 16);
+        }
         startWarp({ warpx: 1280, warpy: 1088, playerX: 1280 + plx, playerY: 1088 + ply, instawarp: true });
         return;
       }
@@ -1089,6 +1179,42 @@ export async function runBoard(canvas, level, opts = {}) {
         return;
       }
 
+    }
+    // Level 4: the switch plates and the deer.
+    if (room.number === 4 && switches.length && !switches[0].used) {
+      const deer = foes.enemies.find((e) => e.kind === 'black_deer');
+      for (const sw of switches) {
+        const on = (o, ox, oy, ow, oh) => o && ox < sw.x + 32 && ox + ow > sw.x && oy < sw.y + 32 && oy + oh > sw.y;
+        const was = sw.pressed;
+        sw.pressed = on(kris, kris.x, kris.y, 32, 32) || (deer && on(deer, deer.x, deer.y, 32, 32));
+        if (sw.pressed && !was) snd('snd_noise', { pitch: 1.4 });
+        if (!sw.pressed && was) snd('snd_noise', { pitch: 1.1 });
+      }
+      if (switches.every((sw) => sw.pressed) && deer && !deerCtl) {
+        for (const sw of switches) sw.used = true;
+        snd('snd_impact');
+        deerCtl = { deer };
+        deer.playerControlled = true;
+        deer.hp = 1; deer.maxhp = 1;
+        kris.canfreemove = false;
+      }
+    }
+    // Level 1's true ending: the CHEST from the tree loop. Its cinematic
+    // (obj_board_swordroute_icekey's Draw): the blue flood #1E76F0, the
+    // four-corner static at quarter alpha (screencolor #ADC7EB), black,
+    // snd_link_get_key, flag 1055 = 1 — and in the game the TV turns off.
+    // The dialogue writer inside the sequence is not reproduced (labelled).
+    if (press1 && room.number === 1 && chest && !chest.taken && !keySeq) {
+      const near = kris.x < chest.x + 32 + 40 && kris.x + KRIS_SIZE > chest.x - 40
+        && kris.y < chest.y + 32 + 40 && kris.y + KRIS_SIZE > chest.y - 40;
+      if (near) {
+        press1 = false;
+        chest.taken = true;
+        kris.canfreemove = false;
+        audio.fadeMusic(2);
+        keySeq = { t: 0 };
+        return;
+      }
     }
     // Level 7's finale: the treasure chest holds the MANTLE — Z opens it.
     if (press1 && room.number === 7 && !outro) {
@@ -1309,6 +1435,7 @@ export async function runBoard(canvas, level, opts = {}) {
     trees.length = 0;
     for (const ts of treeSpawners) ts.made = false;
     treeLoops = 0;
+    chest = null; keySeq = null;
     shift = 'none'; moving = 0; warp = null;
     healthbarFlash = 0;
     death = null; outro = null; kpause = 0;
@@ -1491,6 +1618,12 @@ export async function runBoard(canvas, level, opts = {}) {
       if (c.dropped && c.t > 120 && Math.floor(c.t / 4) % 2) continue;   // the blink
       drawSprite('spr_board_candy', 0, c.x, c.y);
     }
+    for (const sw of switches) {
+      if (onScreen(sw.x, sw.y)) drawSprite('spr_board_dungeon3_switch', sw.pressed || sw.used ? 1 : 0, sw.x, sw.y);
+    }
+    if (chest && !chest.taken && onScreen(chest.x, chest.y)) {
+      drawSprite('spr_board_chest', 0, chest.x, chest.y);
+    }
     if (pickup && !pickup.taken && !kris.sword) {
       // obj_board_pickup's Step: `if (type == "sword") sprite_index =
       // spr_board_sword` — all three levels' pickups carry type "sword" in
@@ -1634,6 +1767,24 @@ export async function runBoard(canvas, level, opts = {}) {
       g.fillStyle = `rgba(0,0,0,${a})`;
       g.fillRect(PANE_X, PANE_Y, PANE_W, PANE_H);
     }
+    if (keySeq) {
+      // the icekey Draw's floods and the four-corner static
+      const t = keySeq.t;
+      if (t >= 90 && t < 150) {
+        g.fillStyle = '#000';
+        g.fillRect(PANE_X, PANE_Y - 32, PANE_W, PANE_H + 32);
+        for (const [sx, sy] of [[64 + 64, 32 + 32], [64 + 64, 288], [320, 32 + 32], [320, 288]]) {
+          const img = S.frame('spr_static_effect', Math.floor(t / 2) % (S.meta('spr_static_effect')?.frames ?? 1));
+          if (img) { g.save(); g.globalAlpha = 0.25; g.drawImage(img, sx, sy, img.width * 2, img.height * 2); g.restore(); }
+        }
+      } else if (t >= 150 && t < 210) {
+        g.fillStyle = '#1E76F0';
+        g.fillRect(PANE_X, PANE_Y - 32, PANE_W, PANE_H + 32);
+      } else if (t >= 210) {
+        g.fillStyle = '#000';
+        g.fillRect(PANE_X, PANE_Y - 32, PANE_W, PANE_H + 32);
+      }
+    }
     shopwriter.draw(g);
     writer.draw(g);
     g.restore();
@@ -1648,6 +1799,7 @@ export async function runBoard(canvas, level, opts = {}) {
       const label = {
         escape: 'ESCAPED', shelter: 'THE SHELTER OPENS', walk: 'THE HOLDER',
         mantle: 'THE MANTLE IS YOURS', finale: 'THE ROUTE IS COMPLETE',
+        key: 'THE ICE KEY', deer: 'THE WAY OPENS',
       }[outro.kind] ?? 'LEVEL COMPLETE';
       font.draw(g, label, 320, 220, { align: 'center', scale: 2 });
     }
