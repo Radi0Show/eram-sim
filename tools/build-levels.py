@@ -22,11 +22,21 @@ LEVELS = [
     ('room_board_1_sword', 1, 'BOARD 1 · THE DESERT'),
     ('room_board_2_sword', 2, 'BOARD 2 · THE WATER'),
     ('room_board_3_sword', 3, 'BOARD 3 · THE APPROACH'),
+    # Everything after ESCAPED — the route to the Mantle.
+    ('room_board_dungeon_3', 4, 'THE SHELTER'),
+    ('room_board_preshadowmantle', 5, 'THE HOLDER'),
+    ('room_shadowmantle', 6, 'THE SHADOW MANTLE'),
+    ('room_board_postshadowmantle', 7, 'AFTER'),
 ]
 
 CAMERA_START = {'room_board_1_sword': (896, 64),
                 'room_board_2_sword': (2432, 3648),
-                'room_board_3_sword': (1280, 320)}
+                'room_board_3_sword': (1280, 320),
+                # obj_board_camera Create, verbatim per room:
+                'room_board_dungeon_3': (896, 1344),
+                'room_board_preshadowmantle': (128, 320),
+                'room_shadowmantle': (128, 64),
+                'room_board_postshadowmantle': (128, 64)}
 
 # Three different walls for three different things:
 #   obj_board_solid (+corner, +treegreen)  blocks KRIS (place_meeting in
@@ -38,7 +48,8 @@ CAMERA_START = {'room_board_1_sword': (896, 64),
 #                                          collision_obj resolves to id 1066
 #                                          = obj_board_solidfish in the
 #                                          sword rooms)
-KRIS_SOLID = {'obj_board_solid', 'obj_board_solidcorner', 'obj_board_solid_treegreen'}
+KRIS_SOLID = {'obj_board_solid', 'obj_board_solidcorner', 'obj_board_solid_treegreen',
+              'obj_solidblocksized'}
 BOAT_SOLID = {'obj_board_boatsolid'}
 FISH_SOLID = {'obj_board_solidfish'}
 CELL = 32
@@ -69,7 +80,8 @@ SPAWNER_DISPATCH = {
     15: {'kind': 'black_deer','hp': 999, 'immunity': 1},
     16: {'kind': 'rotaty',    'hp': 1,   'immunity': 1},
     17: {'kind': 'bouncy',    'hp': 1,   'immunity': 1},
-    # 18+ are not enemies at all — fire bars, ice puzzles, trees, blocks.
+    # 18 IS placed on the route: obj_fire_bar_base — five rotating flames.
+    18: {'kind': 'firebar',   'hp': 999, 'immunity': 99},
 }
 
 # Objects that are pure bookkeeping — never drawn, never data.
@@ -77,6 +89,8 @@ SKIP = {
     'obj_mainchara', 'obj_board_camera', 'obj_board_controller',
     'obj_darkcontroller', 'obj_gameshow_swordroute',
     'obj_board_1_sword_manager', 'obj_b2s_swordmanager', 'obj_b3s_swordmanager',
+    'obj_board_b3s_repeatintro', 'obj_board_dungeon_3_jingle_controller',
+    'obj_shadowmantle_crtcontroller',
 }
 
 CC_DIR = os.path.expanduser('~/knight-research/gml_dump/CodeEntries')
@@ -235,7 +249,16 @@ def build(room, number, title, out_dir):
                    'obj_b2s_heartisland', 'obj_b2s_northernlightsroom',
                    'obj_b2s_tennaentrance', 'obj_b2s_tennamonologue', 'obj_b2s_swordroom',
                    'obj_board_bridgespawner', 'obj_board_b2_bridgeoverlay',
-                   'obj_board_ladder', 'obj_board_cold', 'obj_board_b3s_stanchion'):
+                   'obj_board_ladder', 'obj_board_cold', 'obj_board_b3s_stanchion',
+                   'obj_board_dungeon3_switch', 'obj_board_dungeon_3_shelter',
+                   'obj_board_dungeon3_sheltertunnel', 'obj_board_dungeon3_tenna',
+                   'obj_dungeon3_tennataps', 'obj_board_warptopreshadowmantle',
+                   'obj_board_invincibilespot', 'obj_board_preshadowmantle',
+                   'obj_board_shadowspotlight', 'obj_shadow_mantle_bg',
+                   'obj_shadow_mantle_enemy', 'obj_shadow_mantle_path',
+                   'obj_soliddark', 'obj_board_npc', 'obj_doorAny',
+                   'obj_bpush2_stucktrigger', 'obj_swordroute_event_leavescreen',
+                   'obj_treasure_room'):
             out['events'].append({'obj': o.removeprefix('obj_board_').removeprefix('obj_'),
                                   'sprite': sprite_of(o),
                                   'x': i['x'], 'y': i['y'],

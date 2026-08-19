@@ -33,6 +33,7 @@ import { createAudio } from './audio.js';
 import { loadFont } from './text.js';
 import { createCRT } from './crt.js';
 import { createWriter, createShopwriter } from './writer.js';
+import { createMantle } from './mantle.js';
 
 const VIEW_W = 640, VIEW_H = 480;
 const PANE_X = 128, PANE_Y = 64, PANE_W = 384, PANE_H = 256;
@@ -77,8 +78,11 @@ const DEATH_REDS = [
 ];
 const DEATH_END = 120;
 
-/* The per-level intro colour fades (each manager's con 1). */
-const INTRO_COLOR = { 1: '#FFD864', 2: '#E2FF81', 3: '#4DAFFF' };
+/* The per-level intro colour fades. 1-3 are the managers' con-1 fades;
+   4 is obj_board_b3s_repeatintro's #7C344F; the mantle rooms hold black
+   (obj_gameshow_swordroute's Create). */
+const INTRO_COLOR = { 1: '#FFD864', 2: '#E2FF81', 3: '#4DAFFF',
+  4: '#7C344F', 5: '#000000', 6: '#000000', 7: '#7C344F' };
 
 function pointDirection(x1, y1, x2, y2) {
   const d = Math.atan2(-(y2 - y1), x2 - x1) * 180 / Math.PI;
@@ -102,6 +106,7 @@ export async function runBoard(canvas, level, opts = {}) {
   if (crt) crt.state.enabled = localStorage.getItem('eramsim.crt') !== '0';
   const writer = createWriter(font, S, snd);
   const shopwriter = createShopwriter(font, snd);
+  let mantle = null;   // the Shadow Mantle, level 6 only (created after kris)
 
   const tileset = await new Promise((res, rej) => {
     const i = new Image();
@@ -169,8 +174,13 @@ export async function runBoard(canvas, level, opts = {}) {
     x: room.kris.x + moveX, y: room.kris.y + moveY,
     facing: FACE_DOWN, imageIndex: 0, walkbuffer: 0,
     canfreemove: true, nowx: 0, nowy: 0,
-    sword: opts.sword ?? false, swordlv: 1, xp: 0,
-    xptolevel: room.number === 2 ? 10 : 3,
+    // obj_mainchara_board's Create: the dungeons and the mantle rooms
+    // start WITH the sword (dungeon_3 at swordlv 3, the mantle rooms at 5
+    // via obj_gameshow_swordroute's Create).
+    sword: opts.sword ?? room.number >= 4,
+    swordlv: room.number === 4 ? 3 : room.number >= 5 ? 5 : 1,
+    xp: 0,
+    xptolevel: room.number === 2 ? 10 : room.number === 4 ? 68 : 3,
     swordbuffer: 0, swordfacing: 0, swordhitbox: null,
     myhealth: 999, maxhealth: MAXHEALTH,
     iframes: 0, hurttimer: 0, hitcon: 0, hitmove: 0, hitx: 0, hity: 0,
@@ -184,6 +194,17 @@ export async function runBoard(canvas, level, opts = {}) {
      the sword. The enemies re-derive their own aggression on top. */
   let violence = room.number !== 1;
   if (room.number === 2) violence = false;
+
+  if (room.number === 6) {
+    mantle = createMantle({
+      kris, snd, S, writer,
+      audio,
+      retint: (c, f) => retint(c, f),
+      glitch: (a, b) => { if (crt) { crt.state.glitch = a; crt.state.glitchStrength = b; } },
+      splash: (x, y) => foes.splashAt(x, y),
+      onWin: () => beginOutro('mantle'),
+    });
+  }
 
   const foes = createEnemies(room, {
     solids, fishSolids,
@@ -257,6 +278,8 @@ export async function runBoard(canvas, level, opts = {}) {
     tv.changeTime = frames;
   }
   function mergeColor(a, b, f) {
+    if (!a) a = '#000000';
+    if (!b) b = '#000000';
     const pa = [1, 3, 5].map((i) => parseInt(a.length === 7 ? a.slice(i, i + 2) : 'ff', 16));
     const A = a.startsWith('rgb') ? a.match(/\d+/g).map(Number) : pa;
     const B = b.startsWith('rgb') ? b.match(/\d+/g).map(Number) : [1, 3, 5].map((i) => parseInt(b.slice(i, i + 2), 16));
@@ -663,6 +686,7 @@ export async function runBoard(canvas, level, opts = {}) {
       chopTrees(hb.box);
       chopFerns(hb.box);
       hitFollowers(hb.box);
+      if (mantle) { mantle.swordHit(hb.box); mantle.summonSwordHit(hb.box); }
       hb.timer += 1;
       if (hb.timer >= 5) kris.swordhitbox = null;
     }
@@ -910,6 +934,30 @@ export async function runBoard(canvas, level, opts = {}) {
         if (!tease) shopwriter.clear();
       }
     }
+    // Level 5's confrontation: the two obj_board_preshadowmantle markers
+    // carry the Holder's words.
+    if (room.number === 5 && !writer.active) {
+      for (const e of events) {
+        if (e.obj !== 'preshadowmantle' || e.said) continue;
+        const over = kris.x < e.x + 32 && kris.x + KRIS_SIZE > e.x - 16
+          && kris.y < e.y + 64 && kris.y + KRIS_SIZE > e.y - 32;
+        if (over) {
+          e.said = true;
+          kris.canfreemove = false;
+          writer.open([
+            'Kris..^1. oh..^1. Kris.../',
+            'Is it fun^1, Kris?/',
+            'Playing around like this.../',
+            "That's why you're searching for them^1, aren't you?/",
+            'The SHADOW CRYSTALs.../',
+            "..^1. and the SHADOW MANTLE that I'm holding!/",
+            "Do you honestly think it'll get you what you want...?/",
+            "..^1. no^1, part of you is just..^1. enjoying this^1, isn't it?/%",
+          ], { onClose: () => { kris.canfreemove = true; } });
+          return;
+        }
+      }
+    }
     // The spring: Z on the small pond.
     if (press1 && room.number === 1 && !writer.active && kris.canfreemove
       && shift === 'none' && !warp && !outro && !death) {
@@ -1009,6 +1057,28 @@ export async function runBoard(canvas, level, opts = {}) {
         }
       }
     }
+    // Level 4's exit: obj_board_warptopreshadowmantle — Z at the shelter
+    // door: "USED THE SHELTER KEY", the door creaks open in three steps,
+    // and the walk begins.
+    if (press1 && room.number === 4 && !outro) {
+      const door = events.find((e) => e.obj === 'warptopreshadowmantle');
+      if (door) {
+        const near = kris.x < door.x + 64 + 40 && kris.x + KRIS_SIZE > door.x - 40
+          && kris.y < door.y + 64 + 40 && kris.y + KRIS_SIZE > door.y - 40;
+        if (near) {
+          press1 = false;
+          kris.canfreemove = false;
+          writer.open(['USED THE \\cYSHELTER KEY\\cW./%'], {
+            onClose: () => {
+              snd('snd_board_torch_low', { pitch: 0.9 });
+              snd('snd_board_door_close');
+              beginOutro('shelter');
+            },
+          });
+          return;
+        }
+      }
+    }
     for (const t of triggers) {
       const over = kris.x < t.x + t.w && kris.x + KRIS_SIZE > t.x
         && kris.y < t.y + t.h && kris.y + KRIS_SIZE > t.y;
@@ -1018,6 +1088,27 @@ export async function runBoard(canvas, level, opts = {}) {
         beginOutro('escape');           // b3s con 999: fade and leave
         return;
       }
+
+    }
+    // Level 7's finale: the treasure chest holds the MANTLE — Z opens it.
+    if (press1 && room.number === 7 && !outro) {
+      const chest = events.find((e) => e.obj === 'treasure_room');
+      if (chest) {
+        const near = kris.x < chest.x + 40 + 48 && kris.x + KRIS_SIZE > chest.x - 48
+          && kris.y < chest.y + 40 + 48 && kris.y + KRIS_SIZE > chest.y - 48;
+        if (near) {
+          press1 = false;
+          chest.imageIndex = 1;
+          snd('snd_link_get_key');
+          beginOutro('finale');
+          return;
+        }
+      }
+    }
+    // Level 5: reaching the end of the walk is the handoff to the fight.
+    if (room.number === 5 && !outro && (kris.x - world.x) > 2200) {
+      beginOutro('walk');
+      return;
     }
   }
 
@@ -1060,7 +1151,7 @@ export async function runBoard(canvas, level, opts = {}) {
       || (!kris.canfreemove && kris.boat))
       && kris.iframes <= 0 && kris.myhealth > 0 && !death && !outro;
     if (gate) {
-      const hazard = foes.touching(kris) ?? cactusTouch();
+      const hazard = (mantle ? mantle.touching(kris) : null) ?? foes.touching(kris) ?? cactusTouch();
       if (hazard) {
         kris.iframes = IFRAMES;
         kris.blend = 'red';
@@ -1169,7 +1260,11 @@ export async function runBoard(canvas, level, opts = {}) {
     if (7 - Math.floor(intro.t / 15) <= 0) {
       intro = null;
       tv.drawui = true;
-      audio.music('board_ocean');
+      // level music: the walk plays glacier, the fight nightmare_nes,
+      // everything else the ocean.
+      if (room.number === 5) audio.music('glacier', { volume: 0.7 });
+      else if (room.number === 6) audio.music('nightmare_nes');
+      else audio.music('board_ocean');
     }
   }
 
@@ -1351,10 +1446,13 @@ export async function runBoard(canvas, level, opts = {}) {
         ladder: 'spr_board_ladder',
         b3s_stanchion: 'spr_board_b3s_stanchion',
         '1_sword_shadowtease': 'spr_shadow_mantle_idle',
+        treasure_room: 'spr_treasurebox',
+        npc: 'spr_board_npc_pippins',
+        doorAny: 'spr_doorAny',
       }[e.obj];
       if (visible && onScreen(e.x, e.y)) {
-        drawSprite(visible, e.obj === 'b2s_icedoor' ? (e.imageIndex ?? 0)
-          : e.obj === 'b3s_stanchion' ? e.imageIndex : animClock * 0.1, e.x, e.y);
+        const fixedFrame = ['b2s_icedoor', 'b3s_stanchion', 'treasure_room', 'doorAny'].includes(e.obj);
+        drawSprite(visible, fixedFrame ? (e.imageIndex ?? 0) : animClock * 0.1, e.x, e.y);
       }
     }
     // Tenna, waiting with his back turned — until he makes his getaway.
@@ -1421,6 +1519,11 @@ export async function runBoard(canvas, level, opts = {}) {
       drawSprite(name, frame, t.x, t.y);
     }
 
+    if (mantle) mantle.draw(g);
+    // The walk's spotlight follows Kris (obj_board_shadowspotlight).
+    if (room.number === 5 && !outro) {
+      drawSprite('spr_board_shadow_spotlight', 0, kris.x - 16, kris.y - 16);
+    }
     foes.draw(g, S);
 
     // Kris — on the raft, mid-swing, or walking.
@@ -1542,7 +1645,11 @@ export async function runBoard(canvas, level, opts = {}) {
     if (outro && outro.t > 60) {
       g.fillStyle = '#000';
       g.fillRect(0, 0, VIEW_W, VIEW_H);
-      font.draw(g, room.number === 3 ? 'ESCAPED' : 'LEVEL COMPLETE', 320, 220, { align: 'center', scale: 2 });
+      const label = {
+        escape: 'ESCAPED', shelter: 'THE SHELTER OPENS', walk: 'THE HOLDER',
+        mantle: 'THE MANTLE IS YOURS', finale: 'THE ROUTE IS COMPLETE',
+      }[outro.kind] ?? 'LEVEL COMPLETE';
+      font.draw(g, label, 320, 220, { align: 'center', scale: 2 });
     }
 
     if (death) {
@@ -1597,11 +1704,15 @@ export async function runBoard(canvas, level, opts = {}) {
       stepBoats();
       stepTrail();
       stepAnim();
-      stepSword();
+      // The interacts run BEFORE the swing — obj_mainchara_board's Step
+      // gates the swing on `interacted == 0`, so Z at a door, chest, dock
+      // or pond talks instead of swinging.
       stepPickup();
       stepWarps();
       stepSetPieces();
+      stepSword();
       foes.step(kris);
+      if (mantle) mantle.step();
       stepDamage();
       if (healthbarFlash > 0) healthbarFlash -= 1;
       press1 = false;
@@ -1628,6 +1739,7 @@ export async function runBoard(canvas, level, opts = {}) {
     get intro() { return intro; },
     get tv() { return tv; },
     get pickup() { return pickup; },
+    get mantle() { return mantle; },
     get boats() { return boats; },
     get candies() { return candies; },
     get treeLoops() { return treeLoops; },

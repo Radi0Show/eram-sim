@@ -65,7 +65,8 @@ export const SPAWN_BOUNDS = { x1: 128, x2: 480, y1: 64, y2: 288 };
 /** obj_board_enemy_contact_hitbox's Create. */
 export const CONTACT_DAMAGE = 2;
 
-const HITBOX = { monster: 20, lizard: 20, bluebird: 20, bluefish: 10, flower: 2.5 };
+const HITBOX = { monster: 20, lizard: 20, bluebird: 20, bluefish: 10, flower: 2.5,
+  silentcat: 20, singingcat: 20, black_deer: 20, firebar: 0 };
 
 // hitdir/movedir compass, matching the game: 0=right,1=up,2=left,3=down for
 // enemy movedir; kris.facing is 0=down,1=right,2=up,3=left for knockback.
@@ -144,6 +145,26 @@ export function createEnemies(level, opts = {}) {
         e.lastattack = 4; e.jumpedRecently = 0;
         e.bulletimer = [-30, -20, 10][Math.floor(rng() * 3)];
         e.jump = null;             // {startx,starty,tx,ty,t} while airborne
+      }
+      if (e.kind === 'silentcat') {
+        // Dormant until both singing cats are dead (killedacatbefore == 2),
+        // then wakes one-by-one and HOMES with accelerating velocity.
+        e.aggressive = false; e.activeHitbox = false;
+        e.hspd = 0; e.vspd = 0; e.homing = 0; e.wake = false; e.waketimer = 0;
+        e.xstart = e.x;
+      }
+      if (e.kind === 'singingcat') {
+        e.spd = 2; e.noteDir = 0; e.bubbletimer = 0;
+        e.aggressive = true; e.activeHitbox = true;   // sings regardless
+      }
+      if (e.kind === 'black_deer') {
+        e.spd = 1; e.activeHitbox = false;            // hp 999, harmless walker
+      }
+      if (e.kind === 'firebar') {
+        // obj_fire_bar_base: five flames at len 0/20/40/60/80 spinning at
+        // 12 deg per acting frame (its pieces rotate every 5th frame at
+        // place_speed 12 — the composite cadence is kept).
+        e.place = 0; e.activeHitbox = false;
       }
       if (e.kind === 'bluebird') {
         e.movetimer = -1; e.movespd = 1; e.con = 0; e.yoffset = -10;
@@ -697,20 +718,145 @@ export function createEnemies(level, opts = {}) {
     return false;
   }
 
+  /* ---------------- the cats, the deer, the fire bar ---------------- */
+
+  let killedCats = 0;                    // obj_board_controller.killedacatbefore
+
+  function stepSilentcat(e, kris, i) {
+    swordCollide(e, kris);               // only bites while aggressive in-game;
+    if (hurtState(e, kris, i)) { killedCats += 0; return true; }
+    e.ut += 1;
+    if (e.ut === 2) e.ut = 0; else return false;
+    e.x += e.hspd; e.y += e.vspd;
+    if (kris.leftdoorway) {
+      const singing = enemies.some((o) => o.kind === 'singingcat');
+      if ((killedCats >= 2 || e.justgo) && !e.aggressive && !e.wake && !singing) {
+        e.wake = true;
+        for (const o of enemies) if (o.kind === 'silentcat' && o !== e) o.wakeDelay = 22;
+      }
+      if (e.wakeDelay > 0) { e.wakeDelay -= 1; e.wake = false; }
+      if (e.wake) {
+        e.waketimer += 1;
+        if (e.waketimer === 7) snd('snd_wing', { pitch: 1.2 });
+        e.x = e.xstart + (e.waketimer % 2 === 0 ? 2 : -2);
+        if (e.waketimer === 8) { e.wake = false; e.aggressive = true; e.activeHitbox = true; }
+      }
+      if (e.aggressive) {
+        const dir = Math.atan2(-((kris.y + 16) - (e.y + 16)), (kris.x + 16) - (e.x + 16));
+        e.vspd += -Math.sin(dir) * e.homing;
+        e.hspd += Math.cos(dir) * e.homing;
+        if (e.vspd > 10) e.vspd = 10;
+        if (e.hspd > 10) e.hspd = 10;
+        e.homing = Math.min(2.4, e.homing + 0.4);
+        e.imageIndex = 1;
+      }
+    }
+    return false;
+  }
+
+  function stepSingingcat(e, kris, i) {
+    e.ut += 1;
+    if (e.ut === 2) { e.ut = 0; return false; }
+    // wanders like a monster at spd 2
+    if (e.hurttimer === 0) {
+      if (e.movecon === 0) {
+        e.movedir = Math.floor(rng() * 4);
+        for (let r = 0; r < 4; r++) {
+          if (e.movedir === 0 && boxHits(solids, e.x + 32, e.y)) e.movedir = 1;
+          if (e.movedir === 1 && boxHits(solids, e.x, e.y - 32)) e.movedir = 2;
+          if (e.movedir === 2 && boxHits(solids, e.x - 32, e.y)) e.movedir = 3;
+          if (e.movedir === 3 && boxHits(solids, e.x, e.y + 32)) e.movedir = 0;
+        }
+        e.movecon = 1;
+      }
+      if (e.movecon === 1) {
+        let stop = false;
+        for (let n = 0; n < e.spd && !stop; n++) {
+          const [mx, my] = MOVE[e.movedir];
+          e.x += mx; e.y += my;
+          if (boxHits(solids, e.x, e.y)
+            || e.x < BOUNDS.x1 || e.x > BOUNDS.x2 || e.y < BOUNDS.y1 || e.y > BOUNDS.y2) {
+            e.x -= mx; e.y -= my;
+            e.movedir = e.movedir === 0 ? 2 : e.movedir === 1 ? 3 : e.movedir === 2 ? 0 : 1;
+          }
+          const onCell = (e.movedir === 0 || e.movedir === 2) ? e.x % 32 === 0 : e.y % 32 === 0;
+          if (onCell) { e.movecon = 0; stop = true; }
+        }
+      }
+    }
+    swordCollide(e, kris);
+    const wasAlive = enemies.includes(e);
+    if (hurtState(e, kris, i)) {
+      // killedacatbefore++, and the silent cats stir
+      killedCats += 1;
+      for (const o of enemies) if (o.kind === 'silentcat') { o.justgo = true; }
+      return true;
+    }
+    // the song: a rotating note every 5 acting frames
+    e.bubbletimer += 1;
+    if (e.bubbletimer >= 5 && kris.leftdoorway && e.hurttimer === 0) {
+      e.bubbletimer = 0;
+      projectiles.push({
+        kind: 'note', x: e.x + 16, y: e.y + 20, px: e.x + 16, py: e.y + 20,
+        savex: e.x + 16, savey: e.y + 20,
+        angle: e.noteDir, spd: 0, len: 20, lenSpeed: 5,
+        t: 0, ut: 0, damage: 1, active: false, destroyOnHit: false,
+      });
+      e.noteDir += 30;
+    }
+    e.imageIndex += 0.1;
+    return false;
+  }
+
+  function stepBlackDeer(e, kris, i) {
+    e.ut += 1;
+    if (e.ut === 2) { e.ut = 0; return false; }
+    swordCollide(e, kris);               // hp 999: the blade only stuns it
+    if (hurtState(e, kris, i)) return true;
+    // A slow wanderer (its full switch-pushing puzzle is not reproduced;
+    // labelled in the docs).
+    if (e.movecon === 0) { e.movedir = Math.floor(rng() * 4); e.movecon = 1; e.movetimer = 0; }
+    if (e.movecon === 1) {
+      const [mx, my] = MOVE[e.movedir];
+      if (!boxHits(solids, e.x + mx * e.spd, e.y + my * e.spd)
+        && e.x >= BOUNDS.x1 && e.x <= BOUNDS.x2 && e.y >= BOUNDS.y1 && e.y <= BOUNDS.y2) {
+        e.x += mx * e.spd; e.y += my * e.spd;
+      }
+      e.movetimer += 1;
+      if (e.movetimer > 32) e.movecon = 0;
+    }
+    e.imageIndex += 0.1;
+    return false;
+  }
+
+  function stepFirebar(e) {
+    // pieces rotate every 5th frame at 12 degrees — composite: 2.4/frame
+    e.place += 2.4;
+  }
+
   /* ---------------- projectiles ---------------- */
 
   function stepProjectiles() {
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
       p.t += 1;
-      if (p.kind === 'pellet' && p.t === 5) p.active = true;
-      if ((p.kind === 'pellet' && p.t >= 160) || (p.kind === 'spear' && p.t >= 30)) {
+      if ((p.kind === 'pellet' || p.kind === 'note') && p.t === 5) p.active = true;
+      if ((p.kind === 'pellet' && p.t >= 160) || (p.kind === 'spear' && p.t >= 30)
+        || (p.kind === 'note' && p.t >= 120)) {
         projectiles.splice(i, 1); continue;
       }
       p.ut += 1;
       if (p.ut === 3) p.ut = 0;
       else continue;                     // moves every third frame
       p.px = p.x; p.py = p.y;
+      if (p.kind === 'note') {
+        // the spiral: x = savex + lengthdir(len, place); len += len_speed
+        const rad = p.angle * Math.PI / 180;
+        p.x = p.savex + Math.cos(rad) * p.len;
+        p.y = p.savey - Math.sin(rad) * p.len;
+        p.len += p.lenSpeed;
+        continue;
+      }
       const rad = p.angle * Math.PI / 180;
       p.x += Math.cos(rad) * p.spd;
       p.y -= Math.sin(rad) * p.spd;      // GM y is inverted in lengthdir
@@ -728,6 +874,10 @@ export function createEnemies(level, opts = {}) {
       else if (e.kind === 'bluefish') stepBluefish(e, kris, i);
       else if (e.kind === 'lizard') stepLizard(e, kris, i);
       else if (e.kind === 'bluebird') stepBluebird(e, kris, i);
+      else if (e.kind === 'silentcat') stepSilentcat(e, kris, i);
+      else if (e.kind === 'singingcat') stepSingingcat(e, kris, i);
+      else if (e.kind === 'black_deer') stepBlackDeer(e, kris, i);
+      else if (e.kind === 'firebar') stepFirebar(e);
     }
     stepProjectiles();
     for (let i = fx.length - 1; i >= 0; i--) {
@@ -744,6 +894,20 @@ export function createEnemies(level, opts = {}) {
    *  live projectiles. Returns {damage, px, py, projectile?} or null. */
   function touching(kris) {
     for (const e of enemies) {
+      if (e.kind === 'firebar') {
+        // five flames at len 0..80 (seven at len up to 120 for place 226 —
+        // not on this route), damage 1
+        for (let n = 0; n < 5; n++) {
+          const len = n * 20;
+          const fx0 = e.x + Math.cos(e.place * Math.PI / 180) * len;
+          const fy0 = e.y - Math.sin(e.place * Math.PI / 180) * len;
+          if (kris.x < fx0 + 12 && kris.x + SIZE > fx0 - 12
+            && kris.y < fy0 + 12 && kris.y + SIZE > fy0 - 12) {
+            return { damage: 1, px: fx0, py: fy0 };
+          }
+        }
+        continue;
+      }
       if (!e.activeHitbox || e.hurttimer > 0) continue;
       if (e.kind === 'bluebird' && e.yoffset <= -15) continue;
       const half = (HITBOX[e.kind] ?? 20) / 2;
@@ -784,7 +948,8 @@ export function createEnemies(level, opts = {}) {
   function draw(g, S) {
     // S = the sprite atlas: S.frame(name, index) -> canvas/image or null.
     for (const p of projectiles) {
-      const name = p.kind === 'spear' ? 'spr_board_spear' : 'spr_board_smallbullet';
+      const name = p.kind === 'spear' ? 'spr_board_spear'
+        : p.kind === 'note' ? 'spr_musical_notes' : 'spr_board_smallbullet';
       const f = S.frame(name, Math.floor(p.t / 3) % 2);
       if (!f) continue;
       const scale = 2;
@@ -810,6 +975,22 @@ export function createEnemies(level, opts = {}) {
         name = ['spr_board_bluefish_r', 'spr_board_bluefish_u', 'spr_board_bluefish_l', 'spr_board_bluefish_d'][e.movedir];
       } else if (e.kind === 'lizard') {
         name = e.faceRight ? 'spr_board_lizard_r' : 'spr_board_lizard_l';
+      } else if (e.kind === 'silentcat') {
+        name = 'spr_board_cat_silent';
+      } else if (e.kind === 'singingcat') {
+        name = 'spr_board_cat_singing';
+      } else if (e.kind === 'black_deer') {
+        name = 'spr_board_deer_r_black';
+      } else if (e.kind === 'firebar') {
+        for (let n = 0; n < 5; n++) {
+          const len = n * 20;
+          const fx0 = e.x + Math.cos(e.place * Math.PI / 180) * len;
+          const fy0 = e.y - Math.sin(e.place * Math.PI / 180) * len;
+          const img = S.frame('spr_shadow_mantle_fire', Math.floor(e.imageIndex + n) % 2);
+          if (img) g.drawImage(img, Math.round(fx0) - 14, Math.round(fy0) - 14, img.width * 2, img.height * 2);
+        }
+        e.imageIndex += 0.25;
+        continue;
       } else if (e.kind === 'bluebird') {
         const sh = S.frame('spr_bluebird_shadow', 0);
         if (sh) g.drawImage(sh, Math.round(e.x), Math.round(e.y) + 24, sh.width * 2, sh.height * 2);
@@ -831,6 +1012,8 @@ export function createEnemies(level, opts = {}) {
           bluefish: 'spr_board_monster_hurt',
           lizard: e.faceRight ? 'spr_board_lizard_r_hurt' : 'spr_board_lizard_l_hurt',
           bluebird: 'spr_board_blue_bird_hurt',
+          silentcat: 'spr_board_flower_hurt', singingcat: 'spr_board_cat_singing_hurt',
+          black_deer: 'spr_board_monster_hurt',
         }[e.kind];
         const hf = S.frame(hurtName, Math.floor(e.imageIndex) % 2);
         if (hf) g.drawImage(hf, Math.round(e.x), Math.round(e.y) + dy, hf.width * 2, hf.height * 2);

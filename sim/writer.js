@@ -19,7 +19,7 @@
 // frames a character at board row 2 (+12), snd_board_text_main per glyph
 // and snd_board_text_main_end at the end.
 
-const COLORS = { W: '#ffffff', I: '#5AAFFF' };
+const COLORS = { W: '#ffffff', I: '#5AAFFF', Y: '#ffff00' };
 
 export function createWriter(font, S, snd) {
   let box = null;        // the active board_writer

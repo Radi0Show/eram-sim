@@ -497,6 +497,53 @@ approximated (labelled).
 - The page carries no text anymore; controls and labels moved to the
   README.
 
+## The route after ESCAPED (levels 4-7)
+
+Level 3's exit is `room_goto(room_board_dungeon_3)`; the chain onward, all
+built from fresh room dumps:
+
+4. **THE SHELTER** — room_board_dungeon_3 (6220x6220, 75 spawners): the
+   singing cats whose death (killedacatbefore == 2) wakes the SILENT cats —
+   homing missiles with accelerating velocity capped at 10 (homingfactor ->
+   2.4 by 0.4); the note spirals (a rotating note every 5 acting frames,
+   len += 5 outward); the fire bars (spawner index 18 -> obj_fire_bar_base,
+   five flames at len 0..80 spinning 12 deg per acting frame); the black
+   deer (hp 999). Exit: obj_board_warptopreshadowmantle — Z at the shelter
+   door, "USED THE \cYSHELTER KEY\cW", the torches and the door.
+5. **THE HOLDER** — room_board_preshadowmantle: glacier.ogg, the spotlight,
+   and the Holder's own words ("Is it fun, Kris?...on to the SHADOW
+   MANTLE that I'm holding!"), then the handoff.
+6. **THE SHADOW MANTLE** — room_shadowmantle, the fight, translated from
+   the 1170-line Step_2: hp 30, phases at 22/13/4, the per-window damage
+   schedule (2 / 1.5 / 1 / 0.75 / 0.5 / 0.2 with recovery bonuses, 0.1
+   below hp 5 except 1 during dashes, floor of 4 until phase 4), the
+   attack picker that never repeats lastused, burstwave's bomb volleys
+   (bomb arcs 30 frames -> 20-frame fuse -> a cloud -> four bullets at 10),
+   flamewave's six-flame rings armed at 60-degree spacing then launched
+   (types 4/4.5/5 timings) while he drifts to the path point at lerp 0.15,
+   enemywave's five obj___ summons (the wave ends after he takes five
+   hits), the dash state machine (gravity arcs, groundfire trail every 2
+   frames, top respawn), the laugh telegraphs (61 frames, cut to 31 by a
+   hit), phase transitions with the arena darkening, and nightmare_nes.ogg.
+   THE WIN: he is not slain — "There! That's what I wanted to see!", the
+   full outro taunt, and he floats away with the Mantle.
+7. **AFTER** — room_board_postshadowmantle: the treasure chest.
+
+### Approximations in 4-7 (over and above the page's list)
+
+- The dungeon's switch puzzle, shelter tunnel, Tenna taps and jingle
+  controller are not reproduced; the shelter door opens on Z alone. The
+  black deer wanders instead of holding switches.
+- The fight: the phase-4 clone rain and the type-8 ultimate are reduced to
+  their hazards (the triple fireball spiral + bombs); no mercy scaling
+  from shadow_mantle_losses across sessions; the arena bg's diagonal
+  darkening wave is the surround retint + the ring.
+- Level 5's handoff fires on reaching the corridor's end (x > 2200) rather
+  than the manager's full staging; level 7's NPC and story triggers are
+  furniture.
+- obj___ summons chase in a straight line (the arena is open; the game
+  paths on the same grid).
+
 ## Still to do, if ever
 
 1. The tree-loop ghost helpers and the chest cinematic (level 1's key).

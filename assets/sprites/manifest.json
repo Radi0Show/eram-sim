@@ -1517,5 +1517,159 @@
 "ox": 6,
 "oy": 4,
 "frames": 1
+},
+"spr_whitepixel": {
+"w": 1,
+"h": 1,
+"ox": 0,
+"oy": 0,
+"frames": 1
+},
+"spr_treasurebox": {
+"w": 20,
+"h": 20,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_doorAny": {
+"w": 40,
+"h": 40,
+"ox": 0,
+"oy": 0,
+"frames": 7
+},
+"spr_shadow_mantle_side_r": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 3
+},
+"spr_shadow_mantle_fire2": {
+"w": 14,
+"h": 14,
+"ox": 7,
+"oy": 7,
+"frames": 3
+},
+"spr_board_cat_singing_hurt": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_shadow_mantle_side_l": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 3
+},
+"spr_shadow_mantle_fire": {
+"w": 9,
+"h": 9,
+"ox": 4,
+"oy": 4,
+"frames": 3
+},
+"spr_shadow_mantle_bomb": {
+"w": 8,
+"h": 13,
+"ox": 4,
+"oy": 9,
+"frames": 2
+},
+"spr_shadow_mantle_cloud": {
+"w": 18,
+"h": 16,
+"ox": 7,
+"oy": 6,
+"frames": 3
+},
+"spr_swordroute_shadowmantle_krishitflash": {
+"w": 29,
+"h": 47,
+"ox": 5,
+"oy": 5,
+"frames": 1
+},
+"spr_board_imonfire": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_shadow_mantle_new_tiles_glow1": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 4
+},
+"spr_shadow_mantle_release_abbreviated": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 5
+},
+"spr_shadow_mantle_cloud_white": {
+"w": 18,
+"h": 16,
+"ox": 7,
+"oy": 6,
+"frames": 3
+},
+"spr_shadow_mantle_laugh": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_shadow_mantle_dash": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_shadow_mantle_release": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 10
+},
+"spr_shadow_mantle_new_tiles": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 12
+},
+"spr_shadow_mantle": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 1
+},
+"spr_shadow_mantle_onfire": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_shadow_mantle_new_tiles_glow2": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 4
 }
 }
