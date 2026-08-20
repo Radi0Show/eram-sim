@@ -118,6 +118,7 @@ foreach (var extra in new[] {
     "snd_board_playerhurt","snd_hurt1","snd_board_ominous","snd_board_splash","snd_fall","snd_power",
     "snd_board_kill","snd_board_lift","snd_board_escaped","snd_board_throw","snd_bump","snd_wallclaw",
     "snd_link_get_key","snd_link_secret_bad","snd_board_mantle_move","snd_tv_poweron","snd_tvnoise",
+    "snd_spearrise","snd_board_unsummon","snd_face_hit",
   };
   string dataDir = Path.GetDirectoryName(FilePath);
   var groupCache = new Dictionary<int, UndertaleData>();

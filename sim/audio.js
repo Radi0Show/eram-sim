@@ -41,6 +41,9 @@ const FILES = {
   snd_board_mantle_dash_prepare: 'snd_board_mantle_dash_prepare.wav',
   snd_board_mantle_dash_slow: 'snd_board_mantle_dash_slow.wav',
   snd_board_bomb: 'snd_board_bomb.wav',
+  snd_spearrise: 'snd_spearrise.wav',
+  snd_board_unsummon: 'snd_board_unsummon.wav',
+  snd_face_hit: 'snd_face_hit.wav',
 };
 
 export function createAudio(base) {

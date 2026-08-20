@@ -612,10 +612,13 @@ export function createMantle(host) {
     for (let i = clouds.length - 1; i >= 0; i--) {
       const c = clouds[i];
       c.t += 1;
-      if (c.t === 12) {
-        // four bullets, cardinal, speed 10
-        for (const dir of [0, 90, 180, 270]) {
-          bullets.push({ x: c.x + 16, y: c.y + 16, dir, spd: 10, kind: 'cloud', t: 0 });
+      // the cloud pops at timer 12 and fires when its burst animation
+      // reaches frame 1 (0.25/frame) — four bullets from (x+10, y+16),
+      // image_angle = direction, speed 10
+      if (c.t === 16) {
+        snd('snd_spearrise', { pitch: 1.2 });
+        for (const dir of [180, 0, 90, 270]) {
+          bullets.push({ x: c.x + 10, y: c.y + 16, dir, spd: 10, kind: 'cloud', t: 0 });
         }
       }
       if (c.t >= 24) clouds.splice(i, 1);
@@ -629,7 +632,10 @@ export function createMantle(host) {
       }
       b.x += Math.cos(b.dir * Math.PI / 180) * b.spd;
       b.y -= Math.sin(b.dir * Math.PI / 180) * b.spd;
-      if (b.x < 60 || b.x > 580 || b.y < 0 || b.y > 420 || b.t > 180) bullets.splice(i, 1);
+      // NO wall or bounds checks in the game — a cloud bullet lives
+      // exactly 30 frames and a fireball exactly 100, dying wherever
+      // that lands them (they fly straight over walls).
+      if (b.kind === 'fireball' ? b.t >= 100 : b.t >= 30) bullets.splice(i, 1);
     }
     for (let i = groundfires.length - 1; i >= 0; i--) {
       const gf = groundfires[i];
@@ -752,7 +758,7 @@ export function createMantle(host) {
       if (s.x === px && s.y === py) s.stuck += 1; else s.stuck = 0;
       if (s.t >= 300 || s.stuck > 3) {
         s.dying = s.t;
-        snd('snd_board_summon', { pitch: 0.6 });    // unsummon stand-in
+        snd('snd_board_unsummon');
       }
     }
   }
@@ -762,7 +768,7 @@ export function createMantle(host) {
       if (s.hurt > 0 || s.dead || s.dying || s.t < 20) continue;
       if (box.x < s.x + 32 && box.x + box.w > s.x && box.y < s.y + 32 && box.y + box.h > s.y) {
         s.hurt = 12; s.dead = true;
-        snd('snd_board_damage');
+        snd('snd_face_hit');
         return true;
       }
     }
@@ -894,7 +900,10 @@ export function createMantle(host) {
 
     for (const gf of groundfires) drawSpr('spr_shadow_mantle_fire2', gf.t, gf.x, gf.y);
     for (const c of clouds) drawSpr('spr_shadow_mantle_cloud', c.t * 0.25, c.x, c.y);
-    for (const b of bombs) drawSpr('spr_shadow_mantle_bomb', b.con === 2 && b.fuse > 10 ? 1 : 0, b.x - 16, b.y - 16 + (b.arc ?? 0));
+    // the bomb draws at its instance point (targets are cell-aligned:
+    // 160 + n*32 + 16 / 96 + n*32 + 29) — the old -16,-16 nudge on top of
+    // the origin was what pushed every bomb off the grid
+    for (const b of bombs) drawSpr('spr_shadow_mantle_bomb', b.con === 2 && b.fuse > 10 ? 1 : 0, b.x, b.y + (b.arc ?? 0));
     for (const b of bullets) {
       if (b.t < 0) continue;               // fireballs on their fuse don't exist yet
       // cloud bullets fly with image_angle = direction (the cloud sets both)

@@ -540,9 +540,8 @@ built from fresh room dumps:
 - Level 5's handoff fires on reaching the corridor's end (x > 2200) rather
   than the manager's full staging; level 7's NPC and story triggers are
   furniture.
-- obj___ summons: the materialize ghost stands in for scr_board_marker,
-  and the unsummon sound is snd_board_summon down-pitched (the real
-  snd_board_unsummon / snd_face_hit aren't in the asset pack yet).
+- obj___ summons: the materialize ghost stands in for scr_board_marker
+  (the real snd_board_unsummon and snd_face_hit are in the pack now).
 
 ## Round 5: the chest is the ending, the deer is playable, the clones rain
 
@@ -624,5 +623,3 @@ built from fresh room dumps:
 ## Still to do, if ever
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
-4. snd_board_unsummon and snd_face_hit into the asset pack (the summon
-   stand-ins are labelled above).
