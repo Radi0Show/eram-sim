@@ -12,10 +12,11 @@ gml_dump/
 !assets/sprites/*.png
 !assets/font/*.png
 
-# Audio ships per the project's permission posture; raw extraction scratch
-# does not.
-!assets/audio/*.wav
-!assets/audio/*.ogg
+# AUDIO SHIPS, EVERYWHERE IN THE REPO — standing project policy
+# (2026-08-20): audio is fully permitted in these projects for as long as
+# they are not paywalled and are donation-supported only. (No global
+# audio block ever existed here; this records the policy.) Raw game data
+# above does not move.
 /tmp/
 *.log
 
