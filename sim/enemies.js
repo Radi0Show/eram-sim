@@ -115,6 +115,8 @@ export function createEnemies(level, opts = {}) {
         hp: sp.hp ?? 1, maxhp: sp.hp ?? 1,
         immunity: sp.immunity ?? 1,
         blend: sp.blend ?? null,
+        silverfish: sp.silverfish ?? false,   // spawner 7: the armored fish
+        dontmove: sp.dontmove ?? false,       // spawner cc type 1: turret lizard
         damage: CONTACT_DAMAGE,
         ut: 0,                     // updatetimer
         state: 'move',
@@ -555,7 +557,7 @@ export function createEnemies(level, opts = {}) {
     if (e.ut === 2) { e.ut = 0; return false; }
     if (e.jumpedRecently > 0) e.jumpedRecently -= 1;
     if (!e.aggressive && level.number === 2 && hasSword()) { e.aggressive = true; e.activeHitbox = true; }
-    const dontmove = !e.aggressive;
+    const dontmove = !e.aggressive || e.dontmove;
 
     if (e.state === 'move' && !dontmove) {
       if (e.movecon === 0 && e.hurttimer === 0) {
@@ -647,10 +649,12 @@ export function createEnemies(level, opts = {}) {
       e.movetimer = 0; e.movecon = 0; e.jump = null;
     }
 
-    // The pellet: type 0, at rest, player on screen.
-    if (e.hurttimer === 0 && e.movecon !== 3 && e.variant === 0 && kris.leftdoorway && !dontmove) {
+    // The pellet: type 0, at rest, player on screen. A dontmove lizard
+    // still FIRES — the game's own gate is `bulletimer >= 28 && !dontmove
+    // || bulletimer >= 50 && dontmove` (a slower turret, not a statue).
+    if (e.hurttimer === 0 && e.movecon !== 3 && e.variant === 0 && kris.leftdoorway) {
       e.bulletimer += 1;
-      if (e.bulletimer >= 28) {
+      if (e.bulletimer >= (dontmove ? 50 : 28)) {
         e.faceRight = e.x < kris.x;
         const bx = e.faceRight ? e.x + 24 : e.x + 8, by = e.y + 7;
         const ang = Math.atan2(-((kris.y + 16) - by), (kris.x + 16) - bx) * 180 / Math.PI;
@@ -925,9 +929,9 @@ export function createEnemies(level, opts = {}) {
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
       if (!p.active) continue;
-      // spear [3,6,12,9] o(8,8) -> 20x8; note [10,10,12,12] o(12,12) -> 6x6;
-      // smallbullet (pellets) [3,3,4,4] o(4,4) -> 4x4
-      const [pw, ph] = p.kind === 'spear' ? [10, 4] : p.kind === 'note' ? [3, 3] : [2, 2];
+      // spear [3,6,12,9] o(8,8) -> 20x8; note [10,10,12,12] o(12,12) at
+      // xscale 1 -> 3x3; smallbullet (pellets) [3,3,4,4] o(4,4) -> 4x4
+      const [pw, ph] = p.kind === 'spear' ? [10, 4] : p.kind === 'note' ? [1.5, 1.5] : [2, 2];
       if (hb.x < p.x + pw && hbR > p.x - pw
         && hb.y < p.y + ph && hbB > p.y - ph) {
         if (p.destroyOnHit) projectiles.splice(i, 1);
@@ -962,11 +966,13 @@ export function createEnemies(level, opts = {}) {
         : p.kind === 'note' ? 'spr_musical_notes' : 'spr_board_smallbullet';
       const f = S.frame(name, Math.floor(p.t / 3) % 2);
       if (!f) continue;
-      const scale = 2;
+      // notes are image_xscale 1 in their Create (24px art drawn as-is);
+      // everything else on the board is the usual x2
+      const scale = p.kind === 'note' ? 1 : 2;
       g.save();
       g.translate(Math.round(p.x), Math.round(p.y));
       if (p.kind === 'spear') g.rotate(-p.angle * Math.PI / 180);
-      g.drawImage(f, -f.width, -f.height, f.width * scale, f.height * scale);
+      g.drawImage(f, -f.width * scale / 2, -f.height * scale / 2, f.width * scale, f.height * scale);
       g.restore();
     }
     for (const e of enemies) {
@@ -982,7 +988,9 @@ export function createEnemies(level, opts = {}) {
         name = e.telegraph > 0 ? 'spr_board_flower_telegraph_alt' : 'spr_board_flower_alt';
         if (level.number === 2) name = e.telegraph > 0 ? 'spr_board_flower_telegraph' : 'spr_board_flower';
       } else if (e.kind === 'bluefish') {
-        name = ['spr_board_bluefish_r', 'spr_board_bluefish_u', 'spr_board_bluefish_l', 'spr_board_bluefish_d'][e.movedir];
+        // spawner 7's fish is the SILVERFISH — its own armored sprite set
+        const pre = e.silverfish ? 'spr_board_silverfish_' : 'spr_board_bluefish_';
+        name = [pre + 'r', pre + 'u', pre + 'l', pre + 'd'][e.movedir];
       } else if (e.kind === 'lizard') {
         name = e.faceRight ? 'spr_board_lizard_r' : 'spr_board_lizard_l';
       } else if (e.kind === 'silentcat') {

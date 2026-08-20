@@ -1720,5 +1720,61 @@
 "ox": 0,
 "oy": 0,
 "frames": 1
+},
+"spr_board_silverfish_d": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_u_hurt": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_r": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_l": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_u": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_l_hurt": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_d_hurt": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
+},
+"spr_board_silverfish_r_hurt": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 2
 }
 }

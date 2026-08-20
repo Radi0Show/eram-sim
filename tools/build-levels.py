@@ -69,7 +69,7 @@ SPAWNER_DISPATCH = {
     4:  {'kind': 'flower',    'hp': 1,   'immunity': 2},
     5:  {'kind': 'flower',    'hp': 1,   'immunity': 1, 'variant': 1},
     6:  {'kind': 'bluefish',  'hp': 1,   'immunity': 2},
-    7:  {'kind': 'bluefish',  'hp': 5,   'immunity': 1},
+    7:  {'kind': 'bluefish',  'hp': 5,   'immunity': 1, 'silverfish': True},
     8:  {'kind': 'silentcat', 'hp': 1,   'immunity': 1},
     9:  {'kind': 'singingcat','hp': 2,   'immunity': 1, 'spd': 6, 'variant': 1},
     10: {'kind': 'lizard',    'hp': 2,   'immunity': 1},
@@ -236,9 +236,14 @@ def build(room, number, title, out_dir):
             if d:
                 sp.update({'kind': d['kind'], 'hp': d['hp'],
                            'immunity': d['immunity'], 'variant': d.get('variant'),
-                           'blend': d.get('blend'), 'spd': d.get('spd')})
+                           'blend': d.get('blend'), 'spd': d.get('spd'),
+                           'silverfish': d.get('silverfish')})
             else:
                 sp['kind'] = None
+            # the spawner's own creation code: `type = 1` makes a lizard a
+            # stationary turret (enemy.dontmove = true in the dispatch)
+            if cc.get('type') == 1:
+                sp['dontmove'] = True
             out['spawners'].append(sp)
         elif o == 'obj_board_pickup':
             out['pickup'] = {'x': i['x'], 'y': i['y'], 'cc': cc}

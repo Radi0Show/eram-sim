@@ -646,6 +646,27 @@ built from fresh room dumps:
   nudge painted them off-grid. Cloud bullets and fireballs die on their
   own timers (30 / 100 frames), never at walls.
 
+## Round 8: the silverfish, the turret lizards, and the note's true size
+
+- **Spawner 7 is the SILVERFISH** — obj_board_enemy_bluefish with
+  silverfish = true, hp 5, and its own armored sprite set
+  (spr_board_silverfish_r/u/l/d + hurts, now in the pack). The sim had
+  been drawing it as a plain bluefish.
+- **Spawner creation code carries `type = 1`** on the dungeon's corner
+  lizards -> enemy.dontmove = true: stationary TURRETS, not statues.
+  The game's own fire gate is `bulletimer >= 28 && !dontmove ||
+  bulletimer >= 50 && dontmove` — they still shoot, on the slow cadence.
+  The sim's gate had silenced them entirely.
+- **Notes are image_xscale 1** (24px art drawn as-is, not the board's
+  usual x2) — both the draw and the 3x3 hitbox now match.
+- The silent cats' wake was already right: a singing cat's death sets
+  justgo on every silent cat (killedacatbefore++ as it dies), and they
+  wake staggered 22 frames apart — first kill wakes them, not the second.
+- Trap re-confirmed the hard way: an edit to the spawner branch of
+  build-levels.py stole the `if d:` else and silently nulled the kind of
+  54 of the dungeon's 75 spawners. The level counts in the build output
+  are the tripwire — READ THEM after every regeneration.
+
 ## Still to do, if ever
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
