@@ -620,6 +620,33 @@ built from fresh room dumps:
 - **The board writer word-wraps** at 21 glyphs (384 box, 18px margins,
   hspace 16), breaking at spaces.
 
+## Round 7: the alcove gag, the asset layer, and the 40px solid
+
+- **The Mantle animates at room speed** — image_index advanced per draw
+  frame (60fps) instead of per step (30fps); every animation ran double,
+  and the two-frame laugh strobed.
+- **The BOARD_Assets layer renders** — the builder only ever exported the
+  tile layer, erasing level 1's big door (spr_board_bigdoorstatic),
+  level 2's cave and entrance mouths (spr_board_b2cave /
+  spr_board_b2entrances), and level 3's sewer manhole
+  (spr_board_b3s_sewer) — the manhole that marks the ESCAPED trigger.
+- **obj_solidblocksized is a 40px unit** (spr_block_sized, 40x40 full
+  bbox): sizing it by 32 undersized every such wall by 25%. Solid edges
+  now snap to the nearest cell: the game's per-pixel movement
+  corner-slides past walls overhanging a row by 2px (postshadowmantle's
+  exit corridor); cell-locked movement needs the snapped edge.
+- **Level 7's chest is a sealed GAG.** With correct solids, the chest and
+  Pippins sit INSIDE the top wall — in the game you can never reach them
+  (his Step even skips sword damage in this room). Talking toward him
+  from below gives the MICHAEL read. The route's real exit is the
+  right-hand corridor: the room's triggers hand control to
+  obj_swordroute_event_leavescreen (the leave-the-TV cutscene, reduced
+  here to the finale outro; the full cutscene is out of scope).
+- Bombs: the throw targets were always cell-aligned; a stale -16,-16 draw
+  nudge painted them off-grid. Cloud bullets and fireballs die on their
+  own timers (30 / 100 frames), never at walls.
+
 ## Still to do, if ever
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
+4. The leave-the-TV cutscene (obj_swordroute_event_leavescreen) staging.

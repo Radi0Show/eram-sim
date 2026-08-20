@@ -143,6 +143,13 @@ export async function runBoard(canvas, level, opts = {}) {
     ...f, solid: { x: f.x, y: f.y, w: 32, h: 32 },
   }));
   const events = shifted(room.events ?? []);
+  // obj_board_npc's parent is obj_board_interactable_solid — the NPC is a
+  // WALL (in the chest room he is also sword-immune: the game's own Step
+  // skips sword damage in room_board_postshadowmantle). He guards the
+  // chest forever; that is the design, not a bug.
+  for (const e of events) {
+    if (e.obj === 'npc') e.solid = { x: e.x, y: e.y, w: 32, h: 32 };
+  }
   const docks = shifted(room.docks ?? []);
   const boats = shifted(room.boats ?? []).map((b) => ({
     ...b, engaged: false, facing: FACE_DOWN, bob: 0, disembark: 0, myx: 0, myy: 0,
@@ -153,6 +160,7 @@ export async function runBoard(canvas, level, opts = {}) {
   }));
   for (const c of cactus) solids.push(c.solid);
   for (const f of ferns) solids.push(f.solid);
+  for (const e of events) { if (e.solid) solids.push(e.solid); }
   const candies = [];                 // dropped + placed heal pickups
   const trees = [];                   // spawned by treeSpawners, per screen
 
@@ -1179,7 +1187,13 @@ export async function runBoard(canvas, level, opts = {}) {
         beginOutro('escape');           // b3s con 999: fade and leave
         return;
       }
-
+      // Level 7: the room's triggers line the lower-right exit corridor —
+      // they hand control to obj_swordroute_event_leavescreen (the
+      // leave-the-TV cutscene, reduced here to the finale outro).
+      if (room.number === 7) {
+        beginOutro('finale');
+        return;
+      }
     }
     // Level 4: the switch plates and the deer.
     if (room.number === 4 && switches.length && !switches[0].used) {
@@ -1217,17 +1231,20 @@ export async function runBoard(canvas, level, opts = {}) {
         return;
       }
     }
-    // Level 7's finale: the treasure chest holds the MANTLE — Z opens it.
-    if (press1 && room.number === 7 && !outro) {
-      const chest = events.find((e) => e.obj === 'treasure_room');
-      if (chest) {
-        const near = kris.x < chest.x + 40 + 48 && kris.x + KRIS_SIZE > chest.x - 48
-          && kris.y < chest.y + 40 + 48 && kris.y + KRIS_SIZE > chest.y - 48;
+    // Level 7: the chest is a GAG — Pippins guards it forever (his Step
+    // skips sword damage in this room) and the chest "(won't open.)".
+    // Talking to him is the MICHAEL read; the route continues elsewhere.
+    if (press1 && room.number === 7 && !outro && !writer.active && kris.canfreemove) {
+      const npc = events.find((e) => e.obj === 'npc');
+      if (npc) {
+        const near = kris.x < npc.x + 32 + 16 && kris.x + KRIS_SIZE > npc.x - 16
+          && kris.y < npc.y + 32 + 16 && kris.y + KRIS_SIZE > npc.y - 16;
         if (near) {
           press1 = false;
-          chest.imageIndex = 1;
-          snd('snd_link_get_key');
-          beginOutro('finale');
+          kris.canfreemove = false;
+          writer.open(['* FOUND THE SECRET OF "MICHAEL."\n* ALL MICHAELS NOW ADDED TO INVENTORY./%'], {
+            onClose: () => { kris.canfreemove = true; },
+          });
           return;
         }
       }

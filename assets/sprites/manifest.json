@@ -1692,5 +1692,33 @@
 "ox": 0,
 "oy": 0,
 "frames": 2
+},
+"spr_board_b3s_sewer": {
+"w": 32,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 1
+},
+"spr_board_b2entrances": {
+"w": 32,
+"h": 48,
+"ox": 0,
+"oy": 16,
+"frames": 3
+},
+"spr_board_b2cave": {
+"w": 16,
+"h": 16,
+"ox": 0,
+"oy": 0,
+"frames": 1
+},
+"spr_board_bigdoorstatic": {
+"w": 32,
+"h": 32,
+"ox": 0,
+"oy": 0,
+"frames": 1
 }
 }

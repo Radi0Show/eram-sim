@@ -146,6 +146,10 @@ export function createMantle(host) {
 
   /* ---------------- the step ---------------- */
   function step() {
+    // image_index advances at ROOM SPEED (30fps), never per draw — the
+    // draw loop runs at the display rate and was doubling every
+    // animation (the strobing laugh).
+    boss.imageIndex += boss.imageSpeed;
     if (outro) { stepOutro(); return; }
     boss.siner += 1;
     boss.y += Math.sin(boss.siner / 3);
@@ -927,7 +931,6 @@ export function createMantle(host) {
     for (const p of particles) drawSpr('spr_shadow_mantle_fire', p.t, p.x - 8, p.y - 8, 2, 1 - p.t / 20);
 
     if (boss.alive || outro) {
-      boss.imageIndex += boss.imageSpeed;
       const name = {
         idle: 'spr_shadow_mantle_idle', laugh: 'spr_shadow_mantle_laugh',
         dash: 'spr_shadow_mantle_dash', release: 'spr_shadow_mantle_release',

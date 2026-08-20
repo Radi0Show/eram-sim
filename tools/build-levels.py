@@ -130,13 +130,33 @@ def sprite_of(obj):
     return (OBJECTS.get(obj) or {}).get('sprite')
 
 
-def rect_of(i):
+# Objects the mega-dump's objects.json missed, with dims taken straight
+# from the game data (UndertaleModCli): obj_solidblocksized's sprite is
+# spr_block_sized, 40x40 FULL BBOX — NOT a 32px cell. Sizing it by 32
+# undersized every such wall by 25% (holes at their right/bottom edges).
+SPECIAL_DIMS = {'obj_solidblocksized': {'w': 40, 'h': 40}}
+
+
+def rect_of(i, snap=False):
     """An instance's covered rect, from its sprite dims x its room scale.
-    Solids and regions use spr dims * scale; origins on these are (0,0)."""
+    Solids and regions use spr dims * scale; origins on these are (0,0).
+
+    snap=True rounds each edge to the nearest cell boundary: the game's
+    per-pixel movement corner-slides past walls that overhang a row by a
+    few pixels (postshadowmantle's exit corridor overhangs by 2), but the
+    sim's cell-locked movement cannot — nearest-32 edges keep every
+    slide-passable strip walkable and every real wall sealed."""
     spr = sprite_of(i['obj'])
-    meta = SPRITES.get(spr, {'w': CELL, 'h': CELL})
-    return {'x': i['x'], 'y': i['y'],
-            'w': int(meta['w'] * i['sx']), 'h': int(meta['h'] * i['sy'])}
+    meta = SPECIAL_DIMS.get(i['obj']) or SPRITES.get(spr, {'w': CELL, 'h': CELL})
+    x, y = i['x'], i['y']
+    w, h = meta['w'] * i['sx'], meta['h'] * i['sy']
+    if snap:
+        x2 = round((x + w) / CELL) * CELL
+        y2 = round((y + h) / CELL) * CELL
+        x = round(x / CELL) * CELL
+        y = round(y / CELL) * CELL
+        w, h = x2 - x, y2 - y
+    return {'x': int(x), 'y': int(y), 'w': int(w), 'h': int(h)}
 
 
 def build(room, number, title, out_dir):
@@ -157,6 +177,19 @@ def build(room, number, title, out_dir):
     tiles = next((l for l in rd['layers']
                   if l['type'] == 'Tiles' and l.get('name') == 'BOARD_Tiles'),
                  next(l for l in rd['layers'] if l['type'] == 'Tiles'))
+    # Asset-layer sprite placements (BOARD_Assets): the room's dressing art
+    # — level 1's big door, level 2's cave and entrance mouths, level 3's
+    # sewer manhole. Dropping this layer erased them all. Marker fills
+    # (pxwhite/whitepixel) stay out.
+    asset_props = []
+    for l in rd['layers']:
+        if l['type'] != 'Assets' or not l.get('sprites'):
+            continue
+        for s in l['sprites']:
+            if 'pxwhite' in s['sprite'] or 'whitepixel' in s['sprite']:
+                continue
+            asset_props.append({'sprite': s['sprite'], 'x': s['x'], 'y': s['y'],
+                                'imageIndex': 0})
     bg = next((l.get('color') for l in rd['layers'] if l['type'] == 'Background'), None)
     r = bg & 255 if bg else 0
     g = (bg >> 8) & 255 if bg else 0
@@ -179,7 +212,7 @@ def build(room, number, title, out_dir):
         'spawners': [], 'cactus': [],
         'warps': [], 'triggers': [], 'colorChangers': [],
         'water': [], 'waterfalls': [], 'treeSpawners': [],
-        'boats': [], 'docks': [], 'props': [], 'events': [],
+        'boats': [], 'docks': [], 'props': asset_props, 'events': [],
         'kris': None, 'pickup': None,
     }
 
@@ -191,11 +224,11 @@ def build(room, number, title, out_dir):
         if o == 'obj_mainchara_board':
             out['kris'] = {'x': i['x'], 'y': i['y']}
         elif o in KRIS_SOLID:
-            out['solids'].append(rect_of(i))
+            out['solids'].append(rect_of(i, snap=True))
         elif o in BOAT_SOLID:
-            out['boatSolids'].append(rect_of(i))
+            out['boatSolids'].append(rect_of(i, snap=True))
         elif o in FISH_SOLID:
-            out['fishSolids'].append(rect_of(i))
+            out['fishSolids'].append(rect_of(i, snap=True))
         elif o == 'obj_board_enemy_spawner':
             idx = int(i['imageIndex'])
             d = SPAWNER_DISPATCH.get(idx)
