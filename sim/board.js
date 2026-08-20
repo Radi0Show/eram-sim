@@ -154,11 +154,13 @@ export async function runBoard(canvas, level, opts = {}) {
   const boats = shifted(room.boats ?? []).map((b) => ({
     ...b, engaged: false, facing: FACE_DOWN, bob: 0, disembark: 0, myx: 0, myy: 0,
   }));
+  // obj_board_cactus's parent is obj_board_hazard, NOT obj_board_solid —
+  // a cactus is a walk-in hazard (overlap, damage, the knockback throws
+  // you back out), never a wall. Making it solid left its mask-true
+  // hurtbox unreachable from adjacent cells.
   const cactus = shifted(room.cactus ?? []).map((c) => ({
     ...c, hp: 3, frame: Math.floor(Math.random() * 2),
-    solid: { x: c.x + 2, y: c.y + 2, w: 28, h: 28 },
   }));
-  for (const c of cactus) solids.push(c.solid);
   for (const f of ferns) solids.push(f.solid);
   for (const e of events) { if (e.solid) solids.push(e.solid); }
   const candies = [];                 // dropped + placed heal pickups
@@ -787,8 +789,6 @@ export async function runBoard(canvas, level, opts = {}) {
         c.hitwait = 10;
         snd('snd_board_damage');
         if (c.hp <= 0) {
-          const si = solids.indexOf(c.solid);
-          if (si >= 0) solids.splice(si, 1);
           foes.splashAt(c.x + 16, c.y + 16);
           c.dead = true;
         }
@@ -1073,7 +1073,9 @@ export async function runBoard(canvas, level, opts = {}) {
       if (over && typeof w.warpx === 'number') { startWarp(w); return; }
     }
     for (const e of events) {
-      const ew = 32 * (e.sx || 1), eh = 32 * (e.sy || 1);
+      // the event's mask is its 16px SPRITE x its scale — 32*sx doubled
+      // every trigger (the stairs fired from a cell away)
+      const ew = 16 * (e.sx || 1), eh = 16 * (e.sy || 1);
       const over = kris.x < e.x + ew && kris.x + KRIS_SIZE > e.x
         && kris.y < e.y + eh && kris.y + KRIS_SIZE > e.y;
       if (!over) continue;
@@ -1480,7 +1482,7 @@ export async function runBoard(canvas, level, opts = {}) {
       if (f.dead) { f.dead = false; solids.push(f.solid); }
     }
     for (const c of cactus) {
-      if (c.dead) { c.dead = false; c.hp = 3; solids.push(c.solid); }
+      if (c.dead) { c.dead = false; c.hp = 3; }
     }
     followers.length = 0;
     if (room.number === 3) followers.push({ name: 'susie', delay: 12 }, { name: 'ralsei', delay: 24 });

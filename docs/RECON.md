@@ -667,6 +667,23 @@ built from fresh room dumps:
   54 of the dungeon's 75 spawners. The level counts in the build output
   are the tripwire — READ THEM after every regeneration.
 
+## Round 9: the cactus is not a wall, and violence is live state
+
+- **Event triggers are their 16px sprite x scale.** The overlap boxes
+  used 32*sx — double — so the staircases (b1_shadowteaseentrance, 16px
+  art at xscale 2 = one cell) fired from a cell away.
+- **The L1 monster rederive has NO variant gate** — swordlv > 1 turns on
+  speed, animation AND active_hitbox for every monster in the room; the
+  sim's variant-0 gate left the spear monsters hitboxless post-sword.
+- **obj_board_controller.violence is live state** — level 2's manager
+  flips it once Kris has the sword, and later per-screen spawns read the
+  new value. The sim snapshotted it at level load; spawns now derive it.
+- **The cactus is a HAZARD, not a wall** (parent obj_board_hazard): you
+  walk into it, overlap its 16x24 mask, take the hit, and knockback
+  throws you out. The sim's invented solid made its mask-true hurtbox
+  unreachable from adjacent cells — no cactus could hurt anyone after
+  the hitbox-tightening round. It stays choppable.
+
 ## Still to do, if ever
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.

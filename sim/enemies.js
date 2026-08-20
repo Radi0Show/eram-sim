@@ -83,6 +83,10 @@ export function createEnemies(level, opts = {}) {
   const onCandy = opts.onCandy ?? (() => {});
   const snd = opts.snd ?? (() => {});
   let violence = opts.violence ?? false;
+  // obj_board_controller.violence is LIVE state, not a spawn-time
+  // snapshot: level 2's manager flips it on once Kris has the sword, and
+  // every later per-screen spawn reads the new value.
+  const violent = () => violence || (level.number === 2 && hasSword());
 
   const enemies = [];
   const projectiles = [];
@@ -123,8 +127,8 @@ export function createEnemies(level, opts = {}) {
         movecon: 0, movetimer: 0, moveType: 0, movedir: Math.floor(rng() * 4),
         isMovingTimer: 0, path: null, pathI: 0,
         delay: 0, hurttimer: 0, hitdir: -1,
-        aggressive: violence,
-        activeHitbox: violence,
+        aggressive: violent(),
+        activeHitbox: violent(),
         spd: sp.spd ?? 3,
         imageIndex: 0, imageSpeed: 0.1,
         bulletimer: 0, bubbletimer: 0,
@@ -312,8 +316,10 @@ export function createEnemies(level, opts = {}) {
     e.ut += 1;
     if (e.ut === 2) { e.ut = 0; return false; }
 
-    // room_board_1_sword rederives all of this every frame.
-    if (level.number === 1 && e.variant === 0) {
+    // room_board_1_sword rederives all of this every frame — for EVERY
+    // monster, no variant gate (the game's room block has none; gating on
+    // variant 0 left the spear monsters without a hitbox post-sword).
+    if (level.number === 1) {
       if (swordlv() > 1) { e.imageSpeed = 0.2; e.spd = 3; e.activeHitbox = true; }
       else { e.imageSpeed = 0.1; e.spd = 2; }
     }
