@@ -143,12 +143,16 @@ export async function runBoard(canvas, level, opts = {}) {
     ...f, solid: { x: f.x, y: f.y, w: 32, h: 32 },
   }));
   const events = shifted(room.events ?? []);
-  // obj_board_npc's parent is obj_board_interactable_solid — the NPC is a
-  // WALL (in the chest room he is also sword-immune: the game's own Step
-  // skips sword damage in room_board_postshadowmantle). He guards the
-  // chest forever; that is the design, not a bug.
+  // Events whose objects descend from obj_board_solid are WALLS (the
+  // parent-chain audit): the chest-room NPC (also sword-immune there, per
+  // its own Step), level 3's stanchions, the shelter Tenna, and the
+  // shelter door. Masks are the 16px sprite x scale, like the triggers.
+  const SOLID_EVENTS = new Set(['npc', 'b3s_stanchion', 'dungeon3_tenna',
+    'warptopreshadowmantle']);
   for (const e of events) {
-    if (e.obj === 'npc') e.solid = { x: e.x, y: e.y, w: 32, h: 32 };
+    if (SOLID_EVENTS.has(e.obj)) {
+      e.solid = { x: e.x, y: e.y, w: 16 * (e.sx || 1), h: 16 * (e.sy || 1) };
+    }
   }
   const docks = shifted(room.docks ?? []);
   const boats = shifted(room.boats ?? []).map((b) => ({
@@ -163,6 +167,10 @@ export async function runBoard(canvas, level, opts = {}) {
   }));
   for (const f of ferns) solids.push(f.solid);
   for (const e of events) { if (e.solid) solids.push(e.solid); }
+  // obj_board_b1powerpond's parent is obj_board_solid — the pond blocks.
+  for (const w of water) {
+    if (w.type === 'b1powerpond') solids.push({ x: w.x, y: w.y, w: 64, h: 32 });
+  }
   const candies = [];                 // dropped + placed heal pickups
   const trees = [];                   // spawned by treeSpawners, per screen
 
@@ -1623,6 +1631,7 @@ export async function runBoard(canvas, level, opts = {}) {
         b2_bridgeoverlay: 'spr_board_b2_bridgeoverlay',
         ladder: 'spr_board_ladder',
         b3s_stanchion: 'spr_board_b3s_stanchion',
+        dungeon3_tenna: 'spr_board_npc_tenna_back',
         '1_sword_shadowtease': 'spr_shadow_mantle_idle',
         treasure_room: 'spr_treasurebox',
         npc: 'spr_board_npc_pippins',
