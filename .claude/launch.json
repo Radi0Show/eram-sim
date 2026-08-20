@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "eram-sim",
+      "runtimeExecutable": "python3",
+      "runtimeArgs": ["tools/devserver.py"],
+      "port": 8411
+    }
+  ]
+}

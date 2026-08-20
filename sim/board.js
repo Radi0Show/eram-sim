@@ -195,8 +195,8 @@ export async function runBoard(canvas, level, opts = {}) {
   let violence = room.number !== 1;
   if (room.number === 2) violence = false;
 
-  if (room.number === 6) {
-    mantle = createMantle({
+  function makeMantle() {
+    return createMantle({
       kris, snd, S, writer,
       audio,
       retint: (c, f) => retint(c, f),
@@ -205,6 +205,7 @@ export async function runBoard(canvas, level, opts = {}) {
       onWin: () => beginOutro('mantle'),
     });
   }
+  if (room.number === 6) mantle = makeMantle();
 
   const foes = createEnemies(room, {
     solids, fishSolids,
@@ -1257,12 +1258,22 @@ export async function runBoard(canvas, level, opts = {}) {
   /* ---------------- damage ---------------- */
   let death = null;
 
+  // place_meeting uses SPRITE MASKS, and Kris's is
+  // spr_board_spritemask_16x16_lowerhalf — bbox [0,8,15,15] at xscale 2:
+  // only the LOWER 32x16 half of his cell can be hurt. Every hazard box
+  // below comes from its sprite's bbox the same way (hitboxes.json dump).
+  function krisHurtbox() {
+    return { x: kris.x, y: kris.y + 16, w: KRIS_SIZE, h: 16 };
+  }
+
   function cactusTouch() {
     if (!kris.canfreemove && !kris.boat) return null;
+    const hb = krisHurtbox();
     for (const c of cactus) {
       if (c.dead) continue;
-      if (kris.x < c.x + 32 && kris.x + KRIS_SIZE > c.x
-        && kris.y < c.y + 32 && kris.y + KRIS_SIZE > c.y) {
+      // spr_board_cactus bbox [4,2,11,13] x2 -> a 16x24 box inset in the cell
+      if (hb.x < c.x + 24 && hb.x + hb.w > c.x + 8
+        && hb.y < c.y + 28 && hb.y + hb.h > c.y + 4) {
         return { damage: 1, px: c.x, py: c.y };
       }
     }
@@ -1277,7 +1288,8 @@ export async function runBoard(canvas, level, opts = {}) {
       || (!kris.canfreemove && kris.boat))
       && kris.iframes <= 0 && kris.myhealth > 0 && !death && !outro;
     if (gate) {
-      const hazard = (mantle ? mantle.touching(kris) : null) ?? foes.touching(kris) ?? cactusTouch();
+      const hb = krisHurtbox();
+      const hazard = (mantle ? mantle.touching(hb) : null) ?? foes.touching(hb) ?? cactusTouch();
       if (hazard) {
         kris.iframes = IFRAMES;
         kris.blend = 'red';
@@ -1418,9 +1430,16 @@ export async function runBoard(canvas, level, opts = {}) {
     kris.hitx = 0; kris.hity = 0;
     kris.blend = 'white';
     kris.swordbuffer = 0; kris.swordhitbox = null;
-    kris.xp = 0; kris.swordlv = 1;
-    kris.xptolevel = room.number === 2 ? 10 : 3;
-    kris.sword = opts.sword ?? false;
+    // level-entry state comes back exactly as on first entry — a death in
+    // the mantle rooms must NOT strip the sword (that made level 6
+    // unwinnable after one death)
+    kris.xp = 0;
+    kris.swordlv = room.number === 4 ? 3 : room.number >= 5 ? 5 : 1;
+    kris.xptolevel = room.number === 2 ? 10 : room.number === 4 ? 68 : 3;
+    kris.sword = opts.sword ?? room.number >= 4;
+    // the fight starts over clean — a stale mantle kept its old phase and
+    // a boss mid-flight after death
+    if (room.number === 6) mantle = makeMantle();
     kris.boat = false;
     kris.atdoorway = false; kris.leftdoorway = false;
     kris.monstersdefeated = 0;
@@ -1487,12 +1506,25 @@ export async function runBoard(canvas, level, opts = {}) {
       const rowT = room.grid[ty];
       if (!rowT) continue;
       for (let tx = Math.max(0, x0); tx < Math.min(room.tilesX, x1); tx++) {
-        const id = rowT[tx] & 0x7ffff;
+        const raw = rowT[tx];
+        const id = raw & 0x7ffff;
         if (!id) continue;
         const sx = (id % cols) * (tileW + border * 2) + border;
         const sy = Math.floor(id / cols) * (tileH + border * 2) + border;
-        g.drawImage(tileset, sx, sy, tileW, tileH,
-          world.x + tx * tileW, world.y + ty * tileH, tileW, tileH);
+        const dx = world.x + tx * tileW, dy = world.y + ty * tileH;
+        // GM tile flags: bit 28 mirror (x), bit 29 flip (y), bit 30
+        // rotate 90° — dropping these is what mirrored the walls wrong.
+        if (raw & 0x70000000) {
+          g.save();
+          g.translate(dx + tileW / 2, dy + tileH / 2);
+          if (raw & 0x40000000) g.rotate(Math.PI / 2);
+          g.scale(raw & 0x10000000 ? -1 : 1, raw & 0x20000000 ? -1 : 1);
+          g.drawImage(tileset, sx, sy, tileW, tileH,
+            -tileW / 2, -tileH / 2, tileW, tileH);
+          g.restore();
+        } else {
+          g.drawImage(tileset, sx, sy, tileW, tileH, dx, dy, tileW, tileH);
+        }
       }
     }
   }
@@ -1908,6 +1940,7 @@ export async function runBoard(canvas, level, opts = {}) {
       }
     },
     swing() { press1 = true; },
+    writer,   // debug: probe text-box behaviour (wrapping, pacing)
     /** Debug: jump to a screen. Same code path as a real warptouch. */
     warpTo(warpx, warpy, playerX, playerY) { startWarp({ warpx, warpy, playerX, playerY }); },
     skipIntro() { if (intro) { intro = null; tv.drawui = true; retint(INTRO_COLOR[room.number], 1); } },

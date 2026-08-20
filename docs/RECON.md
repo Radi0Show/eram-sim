@@ -536,13 +536,13 @@ built from fresh room dumps:
   black deer wanders instead of holding switches.
 - The fight: the phase-4 clone rain and the type-8 ultimate are reduced to
   their hazards (the triple fireball spiral + bombs); no mercy scaling
-  from shadow_mantle_losses across sessions; the arena bg's diagonal
-  darkening wave is the surround retint + the ring.
+  from shadow_mantle_losses across sessions.
 - Level 5's handoff fires on reaching the corridor's end (x > 2200) rather
   than the manager's full staging; level 7's NPC and story triggers are
   furniture.
-- obj___ summons chase in a straight line (the arena is open; the game
-  paths on the same grid).
+- obj___ summons: the materialize ghost stands in for scr_board_marker,
+  and the unsummon sound is snd_board_summon down-pitched (the real
+  snd_board_unsummon / snd_face_hit aren't in the asset pack yet).
 
 ## Round 5: the chest is the ending, the deer is playable, the clones rain
 
@@ -582,12 +582,47 @@ built from fresh room dumps:
 - The type-8 ultimate's bomb drops joined the spiral (bomb_spawn at
   spin_a 40/100 onto random free cells, plus the right-edge one at 70).
 
+## Round 6: the fight is staged right, the masks are the hitboxes
+
+- **The Mantle is Kris-sized.** His room instance is image_xscale 1 and
+  his sprites are 32x32 native — the sim had been doubling him. Only the
+  satellites scale up: fire/cloud/bomb/groundfire/imonfire at 2, the
+  obj___ faces at 2 (16x16 art), the dash hitbox at 1.5. His Draw snaps
+  to even pixels (round(x/2)*2). Start (304,176) per the instance; the
+  path point is obj_shadow_mantle_path at (192,96).
+- **The arena is obj_shadow_mantle_bg's tile grid** — 12x8 over (128,64),
+  spr_shadow_mantle_new_tiles, border ring AND fourteen pillar cells at
+  value 1 (the same cells the room plants solids on). Phase transitions
+  sweep the +2 diagonal wave (one diagonal per frame, the double-fire at
+  timer 34 kept verbatim); values 6/7 swap to the animated glow tiles.
+  The surround colorchange colours decoded from BGR: 6169907 -> #33235E,
+  5446739 -> #531D53, 595307 -> #EB1509.
+- **The summons are the spr___ faces** and they respect solids: cardinal
+  cell wander with the four-way re-choose, and ONE pather at a time
+  walking the grid to Kris's cell at 3.5 px/f (re-aimed every 9 frames,
+  the game's mp_grid path). spd lerps 6 -> 3 over life frames 60-180;
+  300 frames or a wedge is the unsummon (spr___no).
+- **Hitboxes are sprite masks now** (the hitboxes.json dump):
+  Kris's hazard mask is spr_board_spritemask_16x16_lowerhalf — only his
+  LOWER 32x16 half can be hurt. Enemy contact is spr_hitbox_10px_center
+  at xscale 2 = 20x20 at the enemy's centre. Pellets 4x4, spears 20x8,
+  notes 6x6, mantle fires 6x6, cloud bullets 4x10 (rotated to their
+  direction — the cloud sets image_angle), groundfire 14x14ish,
+  cactus a 16x24 inset. The Mantle's BODY is not a hazard at all — his
+  object has no hazard parent; the dash hurts via 15px boxes at his
+  centre and one velocity-length ahead (clones identically — their
+  bodies are also harmless, only their trail and dash boxes hurt).
+- **Tile flip bits render.** GM tile ids carry mirror/flip/rotate in bits
+  28-30; levels 2, 3 and the dungeon have 150+ flagged wall tiles the
+  renderer was drawing unflipped.
+- **Death in the fight restarts it clean** — the mantle is recreated and
+  the level-entry sword state (lv 5) comes back; a stale mantle used to
+  keep its old phase with the sword stripped (unwinnable).
+- **The board writer word-wraps** at 21 glyphs (384 box, 18px margins,
+  hspace 16), breaking at spaces.
+
 ## Still to do, if ever
 2. The rank screen (out of the three-level scope; scr_get_rank_letter).
 3. The caterpillar catch-up interpolation and obj_writer pacing, exactly.
-
-## Deliberately out of scope
-
-The Shadow Mantle encounter itself (`obj_shadow_mantle_*`, hp 30, with
-burstwave / enemywave / flamewave / dash) and the boards proper. Only the
-three sword levels.
+4. snd_board_unsummon and snd_face_hit into the asset pack (the summon
+   stand-ins are labelled above).

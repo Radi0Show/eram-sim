@@ -897,17 +897,20 @@ export function createEnemies(level, opts = {}) {
 
   /** The hazard Kris is touching, if any: enemy contact boxes first, then
    *  live projectiles. Returns {damage, px, py, projectile?} or null. */
-  function touching(kris) {
+  // `hb` is Kris's HURTBOX (his lower-half mask, built by the board), not
+  // his full cell. Every hazard box is its sprite's bbox at xscale 2.
+  function touching(hb) {
+    const hbR = hb.x + (hb.w ?? SIZE), hbB = hb.y + (hb.h ?? SIZE);
     for (const e of enemies) {
       if (e.kind === 'firebar') {
-        // five flames at len 0..80 (seven at len up to 120 for place 226 —
-        // not on this route), damage 1
+        // five flames at len 0..80, damage 1.
+        // spr_board_fire bbox [4,8,9,12] origin (7,7) x2 -> low-riding 12x10
         for (let n = 0; n < 5; n++) {
           const len = n * 20;
           const fx0 = e.x + Math.cos(e.place * Math.PI / 180) * len;
           const fy0 = e.y - Math.sin(e.place * Math.PI / 180) * len;
-          if (kris.x < fx0 + 12 && kris.x + SIZE > fx0 - 12
-            && kris.y < fy0 + 12 && kris.y + SIZE > fy0 - 12) {
+          if (hb.x < fx0 + 6 && hbR > fx0 - 6
+            && hb.y < fy0 + 12 && hbB > fy0 + 2) {
             return { damage: 1, px: fx0, py: fy0 };
           }
         }
@@ -917,14 +920,16 @@ export function createEnemies(level, opts = {}) {
       if (e.kind === 'bluebird' && e.yoffset <= -15) continue;
       const half = (HITBOX[e.kind] ?? 20) / 2;
       const hx = e.x + 16 - half, hy = e.y + 16 - half, hs = half * 2;
-      if (kris.x < hx + hs && kris.x + SIZE > hx && kris.y < hy + hs && kris.y + SIZE > hy) return e;
+      if (hb.x < hx + hs && hbR > hx && hb.y < hy + hs && hbB > hy) return e;
     }
     for (let i = projectiles.length - 1; i >= 0; i--) {
       const p = projectiles[i];
       if (!p.active) continue;
-      const s = p.kind === 'spear' ? 24 : 12;
-      if (kris.x < p.x + s / 2 && kris.x + SIZE > p.x - s / 2
-        && kris.y < p.y + s / 2 && kris.y + SIZE > p.y - s / 2) {
+      // spear [3,6,12,9] o(8,8) -> 20x8; note [10,10,12,12] o(12,12) -> 6x6;
+      // smallbullet (pellets) [3,3,4,4] o(4,4) -> 4x4
+      const [pw, ph] = p.kind === 'spear' ? [10, 4] : p.kind === 'note' ? [3, 3] : [2, 2];
+      if (hb.x < p.x + pw && hbR > p.x - pw
+        && hb.y < p.y + ph && hbB > p.y - ph) {
         if (p.destroyOnHit) projectiles.splice(i, 1);
         return p;
       }

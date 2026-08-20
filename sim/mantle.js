@@ -20,28 +20,54 @@
 //
 // THE WIN: hp < 1 -> the outro. He is not slain — he taunts ("There!
 // That's what I wanted to see!"), floats up and away with the MANTLE, and
-// leaves you the room. Approximations: the arena background's diagonal
-// darkening wave is simplified to the border ring + surround retints; the
-// phase-4 clone rain and the type-8 ultimate ring are reduced to their
-// hazards (bombs + the triple fireball spiral); mercy scaling from
-// global.shadow_mantle_losses is not tracked across sessions.
+// leaves you the room. Approximations: the phase-4 clone rain and the
+// type-8 ultimate ring are reduced to their hazards (bombs + the triple
+// fireball spiral); mercy scaling from global.shadow_mantle_losses is not
+// tracked across sessions; the summons' materialize ghost stands in for
+// scr_board_marker.
+//
+// SCALE, because it was wrong once: the Mantle's room instance is
+// image_xscale 1 and his sprites are 32x32 native — he is KRIS-SIZED.
+// Only the satellites are scaled up (fire/cloud/bomb/groundfire/imonfire
+// xscale 2, the obj___ faces xscale 2 of 16x16, dash hitbox 1.5). His
+// Draw snaps to even pixels: round(x/2)*2.
 
 const ARENA = { x1: 160, x2: 480, y1: 96, y2: 288 };   // the fight floor
+
+// obj_shadow_mantle_bg's tile_grid, verbatim from its Create: a 12x8 field
+// over (128,64), border ring and fourteen pillar cells at value 1 (the
+// raised tiles — the same cells the room plants obj_board_solid on), floor
+// at 0. Each phase transition sweeps a diagonal wave (+2 per cell) across
+// it; values 6/7 swap to the animated glow tiles in phase 4.
+const PILLARS = [[1, 1], [2, 3], [2, 5], [3, 2], [4, 4], [4, 5], [5, 2],
+  [6, 5], [7, 2], [7, 3], [8, 5], [9, 2], [9, 4], [10, 6]];
+
+function makeTileGrid() {
+  const g = [];
+  for (let c = 0; c < 12; c++) {
+    g[c] = [];
+    for (let r = 0; r < 8; r++) {
+      g[c][r] = (c === 0 || c === 11 || r === 0 || r === 7) ? 1 : 0;
+    }
+  }
+  for (const [c, r] of PILLARS) g[c][r] = 1;
+  return g;
+}
 
 export function createMantle(host) {
   const { kris, snd, S, writer, retint, onWin } = host;
 
   const boss = {
-    x: 304, y: 160, hp: 30, hpMax: 30,
+    x: 304, y: 176, hp: 30, hpMax: 30,   // the room instance's spot
     phase: 1, hurttimer: 0, telegraph: 0, attacktimer: 10,
     timeshit: 0, damagetaken: 0,
     burstUsed: 0, enemyUsed: 0, flameUsed: 0, dashUsed: 0, lastused: 'none',
     burstCon: 0, burstTimer: 0,
     flameCon: 0, flameTimer: 0,
     spawnCon: 0, spawnTimer: 0, hitsDuringEnemies: 0,
-    dashCon: 0, dashTimer: 0, dashCount: 0, dashHitboxTimer: 0,
+    dashCon: 0, dashTimer: 0, dashCount: 0,
     transCon: 0, transTimer: 0,
-    moveStyle: 'none', moveCon: 0, moveTimer: 0, targetx: 304, targety: 160,
+    moveStyle: 'none', moveCon: 0, moveTimer: 0, targetx: 304, targety: 176,
     vx: 0, vy: 0, speed: 0, dir: 270, grav: 0, gravDir: 270, fric: 0,
     siner: 0, sprite: 'idle', imageIndex: 0, imageSpeed: 1 / 3,
     blend: null, onFire: false, alive: true, won: false,
@@ -58,11 +84,32 @@ export function createMantle(host) {
   const clones = [];       // phase 4's diving copies
   let outro = null;
 
-  const PATHX = 304, PATHY = 128;      // obj_shadow_mantle_path's spot
+  const PATHX = 192, PATHY = 96;       // obj_shadow_mantle_path's instance
+
+  // The arena floor and its wave (obj_shadow_mantle_bg).
+  const tileGrid = makeTileGrid();
+  const walls = makeTileGrid();        // the initial values ARE the walls
+  let waveTimer = -1;                  // >= 0 while the diagonal sweep runs
+  let glowIndex = 0;
+
+  function cellBlocked(cx, cy) {
+    const c = (cx - 128) >> 5, r = (cy - 64) >> 5;
+    if (c < 0 || c > 11 || r < 0 || r > 7) return true;
+    return walls[c][r] === 1;
+  }
 
   function cell(nx, ny) { return { x: 160 + nx * 32, y: 96 + ny * 32 }; }
   const irandom = (n) => Math.floor(Math.random() * (n + 1));
   const choose = (...a) => a[Math.floor(Math.random() * a.length)];
+
+  // A free interior cell (the game's spawners never sit inside a pillar).
+  function freeCell() {
+    for (let tries = 0; tries < 20; tries++) {
+      const x = 160 + irandom(9) * 32, y = 96 + irandom(5) * 32;
+      if (!cellBlocked(x + 16, y + 16)) return { x, y };
+    }
+    return { x: 304, y: 192 };
+  }
 
   /* ---------------- the sword ---------------- */
   function swordHit(box) {
@@ -132,6 +179,25 @@ export function createMantle(host) {
     stepMove();
     stepProjectiles();
     stepSummons();
+    stepWave();
+  }
+
+  // The bg's diagonal sweep: +2 to every cell on one diagonal per frame
+  // (timer advances by 2, one diagonal per tick), with the dump's quirk —
+  // the two last diagonals share timer 34 — kept verbatim.
+  function stepWave() {
+    glowIndex += 0.05;
+    if (waveTimer < 0) return;
+    waveTimer += 2;
+    const bump = (sum) => {
+      for (let c = 0; c < 12; c++) {
+        const r = sum - c;
+        if (r >= 0 && r < 8) tileGrid[c][r] += 2;
+      }
+    };
+    if (waveTimer <= 32) bump(waveTimer / 2 - 1);
+    else if (waveTimer === 34) { bump(16); bump(17); }
+    else if (waveTimer === 36) { tileGrid[11][7] += 2; waveTimer = -1; return; }
   }
 
   function pickAttack() {
@@ -246,9 +312,10 @@ export function createMantle(host) {
     if (st === 1) { boss.sprite = choose('side_r', 'side_l'); boss.imageSpeed = 1 / 3; }
     if ([15, 30, 45, 60, 75].includes(st)) {
       snd('snd_board_summon');
-      const spot = { x: 160 + irandom(9) * 32, y: 96 + irandom(5) * 32 };
+      const spot = freeCell();
       summons.push({ x: spot.x, y: spot.y, t: 0, hurt: 0, alive: true,
-        spd: 5 + irandom(2), moveT: 0 });
+        spd: 5, moveDir: -1, pather: summons.length === 0, path: null,
+        pathT: 0, px: spot.x, py: spot.y, stuck: 0 });
     }
     if (st === 75) boss.hitsDuringEnemies = 0;
     if (st === 77) {
@@ -290,10 +357,11 @@ export function createMantle(host) {
       boss.transTimer += 1;
       if (boss.transTimer === 25) {
         snd('snd_board_mantle_move', { pitch: 0.7 });
-        // The arena darkens a step: the bg's diagonal wave, reduced to the
-        // surround retint (colours from obj_shadow_mantle_bg, BGR decoded).
-        const cols = { 2: '#282061', 3: '#33235e', 4: '#0b1509' };
-        retint(cols[boss.phase] ?? '#000000', 5);
+        waveTimer = 0;   // the bg's diagonal darkening sweep starts
+        // The surround follows (the bg's colorchange, BGR decoded per the
+        // border tile's new value: 3/5/7).
+        const cols = { 2: '#33235e', 3: '#531d53', 4: '#eb1509' };
+        retint(cols[boss.phase] ?? '#a82061', 5);
       }
       if (boss.transTimer === 46 && boss.phase === 4) {
         boss.sprite = 'dash'; boss.onFire = true;
@@ -393,10 +461,6 @@ export function createMantle(host) {
         boss.speed = 0; boss.grav = 0; boss.dir = 270; boss.gravDir = 270;
         boss.x = 160 + irandom(9) * 32; boss.y = 54;
       }
-      if (boss.onFire) {
-        boss.dashHitboxTimer += 1;
-        // the dash hitbox rides just ahead of him — folded into touching()
-      } else boss.dashHitboxTimer = 0;
     }
     // physics: speed/gravity along direction (GM's built-in motion)
     if (boss.speed !== 0 || boss.grav !== 0) {
@@ -592,7 +656,43 @@ export function createMantle(host) {
   }
 
   /* ---------------- the summons (obj___) ---------------- */
+  // Verbatim behaviour from its Step: after materializing (image_index
+  // += 0.25 to 5, ~20 frames) it wanders one cell at a time in cardinal
+  // steps, re-choosing (four times) any direction a solid blocks, at spd
+  // px/frame — spd lerps 6 -> 3 over frames 60-180. When a step lands (or
+  // whenever the boss is below hp 5) it may switch to pathing straight at
+  // Kris's cell on the solid-aware grid at 3.5 px/frame, re-aimed every 9
+  // frames — but only ONE of them paths at a time. 300 frames alive, or
+  // being wedged, is the disappear (spr___no).
+  function summonBFS(from, to) {
+    // mp_grid_path on the 12x8 arena: breadth-first, cardinal, walls out.
+    const key = (c, r) => c * 8 + r;
+    const start = [(from.x - 128) >> 5, (from.y - 64) >> 5];
+    const goal = [(to.x - 128) >> 5, (to.y - 64) >> 5];
+    if (start[0] === goal[0] && start[1] === goal[1]) return null;
+    const prev = new Map([[key(...start), null]]);
+    const q = [start];
+    while (q.length) {
+      const [c, r] = q.shift();
+      if (c === goal[0] && r === goal[1]) {
+        const path = [];
+        for (let k = [c, r]; k; k = prev.get(key(...k))) path.unshift({ x: 128 + k[0] * 32, y: 64 + k[1] * 32 });
+        return path.length > 1 ? path.slice(1) : null;
+      }
+      for (const [dc, dr] of [[1, 0], [-1, 0], [0, 1], [0, -1]]) {
+        const nc = c + dc, nr = r + dr;
+        if (nc < 0 || nc > 11 || nr < 0 || nr > 7) continue;
+        if (walls[nc][nr] === 1 && !(nc === goal[0] && nr === goal[1])) continue;
+        if (prev.has(key(nc, nr))) continue;
+        prev.set(key(nc, nr), [c, r]);
+        q.push([nc, nr]);
+      }
+    }
+    return null;
+  }
+
   function stepSummons() {
+    const anyPathing = summons.some((s) => s.pather && !s.dead);
     for (let i = summons.length - 1; i >= 0; i--) {
       const s = summons[i];
       s.t += 1;
@@ -601,23 +701,67 @@ export function createMantle(host) {
         if (s.hurt === 0 && s.dead) { summons.splice(i, 1); host.splash?.(s.x + 16, s.y + 16); continue; }
         continue;
       }
+      if (s.dying) {
+        if (s.t - s.dying > 14) { summons.splice(i, 1); host.splash?.(s.x + 16, s.y + 16); }
+        continue;
+      }
       if (s.t < 20) continue;                     // materializing
-      // chase Kris at spd, straight-line (the game paths on the grid; the
-      // arena is open so the line is the path)
-      const dx = kris.x - s.x, dy = kris.y - s.y;
-      const d = Math.hypot(dx, dy) || 1;
-      const spd = s.spd * 0.5;                    // half-rate cadence baked in
-      s.x += (dx / d) * spd;
-      s.y += (dy / d) * spd;
-      if (s.t >= 300) { summons.splice(i, 1); continue; }
+      // spd = lerp(6, 3) over frames 60-180 of its life
+      const lt = s.t - 20;
+      s.spd = lt <= 60 ? 5 : lt >= 180 ? 3 : 6 - 3 * ((lt - 60) / 120);
+      const px = s.x, py = s.y;
+      if (!s.pather && !anyPathing && boss.hp < 5 && boss.dashCon === 0) s.pather = true;
+      if (s.pather) {
+        s.pathT += 1;
+        if (s.pathT >= 9 || !s.path) {
+          s.pathT = 0;
+          // snap to the grid the way the game does before re-pathing
+          s.x = Math.round((s.x - 128) / 32) * 32 + 128;
+          s.y = Math.round((s.y - 64) / 32) * 32 + 64;
+          const kx = 128 + (((kris.x + 16 - 128) >> 5) << 5);
+          const ky = 64 + (((kris.y + 18 - 64) >> 5) << 5);
+          s.path = summonBFS(s, { x: kx, y: ky });
+        }
+        if (s.path && s.path.length) {
+          const n = s.path[0];
+          const dx = n.x - s.x, dy = n.y - s.y;
+          const d = Math.hypot(dx, dy);
+          if (d <= 3.5) { s.x = n.x; s.y = n.y; s.path.shift(); }
+          else { s.x += (dx / d) * 3.5; s.y += (dy / d) * 3.5; }
+        }
+      } else {
+        // cardinal wander, one cell per step, solids re-choose the way
+        if (s.moveDir < 0) {
+          let dir = choose(0, 1, 2, 3);
+          for (let r = 0; r < 4; r++) {
+            const [dx, dy] = [[32, 0], [0, -32], [-32, 0], [0, 32]][dir];
+            if (cellBlocked(s.x + 16 + dx, s.y + 16 + dy)) dir = (dir + 1) % 4;
+          }
+          const [dx, dy] = [[32, 0], [0, -32], [-32, 0], [0, 32]][dir];
+          if (cellBlocked(s.x + 16 + dx, s.y + 16 + dy)) { s.stuck += 1; }
+          else { s.moveDir = dir; s.tx = s.x + dx; s.ty = s.y + dy; }
+        }
+        if (s.moveDir >= 0) {
+          const dx = s.tx - s.x, dy = s.ty - s.y;
+          const d = Math.hypot(dx, dy);
+          if (d <= s.spd) { s.x = s.tx; s.y = s.ty; s.moveDir = -1; }
+          else { s.x += Math.sign(dx) * s.spd; s.y += Math.sign(dy) * s.spd; }
+        }
+      }
+      // wedged against a wall or out of time -> the unsummon
+      if (s.x === px && s.y === py) s.stuck += 1; else s.stuck = 0;
+      if (s.t >= 300 || s.stuck > 3) {
+        s.dying = s.t;
+        snd('snd_board_summon', { pitch: 0.6 });    // unsummon stand-in
+      }
     }
   }
 
   function summonSwordHit(box) {
     for (const s of summons) {
-      if (s.hurt > 0 || s.dead) continue;
+      if (s.hurt > 0 || s.dead || s.dying || s.t < 20) continue;
       if (box.x < s.x + 32 && box.x + box.w > s.x && box.y < s.y + 32 && box.y + box.h > s.y) {
-        s.hurt = 10; s.dead = true;
+        s.hurt = 12; s.dead = true;
         snd('snd_board_damage');
         return true;
       }
@@ -626,42 +770,56 @@ export function createMantle(host) {
   }
 
   /* ---------------- hazards vs Kris ---------------- */
-  function touching(k) {
+  // `hb` is Kris's lower-half hurtbox. The Mantle's own body is NOT a
+  // hazard (his object has no hazard parent) — the dash hurts through
+  // obj_shadow_mantle_dash_hitbox, a 15px box (10px sprite at xscale 1.5)
+  // dropped at his center and thrown one velocity-length ahead, every
+  // dashing frame. Clones hurt the same way. Everything else is its
+  // sprite's bbox at xscale 2.
+  function touching(hb) {
     if (outro) return null;
-    // the boss on fire (dashing/ignited) hits for 2 via the dash hitbox
-    if (boss.onFire && boss.dashHitboxTimer > 20) {
-      if (k.x < boss.x + 32 && k.x + 32 > boss.x && k.y < boss.y + 32 && k.y + 32 > boss.y) {
+    const hbR = hb.x + (hb.w ?? 32), hbB = hb.y + (hb.h ?? 32);
+    const box = (cx, cy, hw, hh) =>
+      hb.x < cx + hw && hbR > cx - hw && hb.y < cy + hh && hbB > cy - hh;
+    const dashBoxes = (cx, cy, vx, vy) =>
+      box(cx, cy, 7.5, 7.5) || box(cx + vx, cy + vy, 7.5, 7.5);
+    if (boss.onFire && (boss.speed !== 0 || boss.vy !== 0)) {
+      if (dashBoxes(boss.x + 16, boss.y + 16, boss.vx, boss.vy)) {
         return { damage: 2, px: boss.x, py: boss.y };
       }
     }
     for (const gf of groundfires) {
-      if (gf.t <= 5 && k.x < gf.x + 16 && k.x + 32 > gf.x - 16 && k.y < gf.y + 16 && k.y + 32 > gf.y - 16) {
+      // spr_shadow_mantle_fire2 bbox [4,5,10,11] o(7,7) x2
+      if (gf.t <= 5 && hb.x < gf.x + 8 && hbR > gf.x - 6 && hb.y < gf.y + 10 && hbB > gf.y - 4) {
         return { damage: 2, px: gf.x, py: gf.y };
       }
     }
     for (const b of bullets) {
       if (b.t < 5) continue;
-      if (k.x < b.x + 12 && k.x + 32 > b.x - 12 && k.y < b.y + 12 && k.y + 32 > b.y - 12) {
-        return { damage: b.kind === 'fireball' ? 1 : 2, px: b.x, py: b.y };
+      if (b.kind === 'fireball') {
+        // spr_shadow_mantle_fire bbox [3,3,5,5] o(4,4) x2 -> 6x6
+        if (box(b.x + 1, b.y + 1, 3, 3)) return { damage: 1, px: b.x, py: b.y };
+      } else {
+        // spr_shadow_mantle_cloud_projectile bbox [2,5,3,9] o(3,7) x2 -> 4x10
+        if (hb.x < b.x + 2 && hbR > b.x - 2 && hb.y < b.y + 6 && hbB > b.y - 4) {
+          return { damage: 2, px: b.x, py: b.y };
+        }
       }
     }
     for (const f of fires) {
       if (!f.launched && fireCtl) continue;        // arming flames are visual
-      if (k.x < f.x + 14 && k.x + 32 > f.x - 14 && k.y < f.y + 14 && k.y + 32 > f.y - 14) {
-        return { damage: 1, px: f.x, py: f.y };
-      }
+      if (box(f.x + 1, f.y + 1, 3, 3)) return { damage: 1, px: f.x, py: f.y };
     }
     for (const c of clones) {
-      if (k.x < c.x + 32 && k.x + 32 > c.x && k.y < c.y + 32 && k.y + 32 > c.y) {
+      const rad = c.dir * Math.PI / 180;
+      if (dashBoxes(c.x + 16, c.y + 16, Math.cos(rad) * c.spd, -Math.sin(rad) * c.spd)) {
         return { damage: 2, px: c.x, py: c.y };
       }
     }
     for (const s of summons) {
-      if (s.t < 20 || s.dead) continue;
-      const hx = s.x + 6, hy = s.y + 6;
-      if (k.x < hx + 20 && k.x + 32 > hx && k.y < hy + 20 && k.y + 32 > hy) {
-        return { damage: 2, px: s.x, py: s.y };
-      }
+      if (s.t < 20 || s.dead || s.dying) continue;
+      // the 20x20 contact hitbox at its center, like every board enemy
+      if (box(s.x + 16, s.y + 16, 10, 10)) return { damage: 2, px: s.x, py: s.y };
     }
     return null;
   }
@@ -694,39 +852,70 @@ export function createMantle(host) {
 
   /* ---------------- drawing ---------------- */
   function draw(g) {
-    // the arena: dark floor ringed by the border (the bg object's grid,
-    // reduced to its silhouette)
-    g.fillStyle = '#0a0a12';
-    g.fillRect(128, 64, 384, 256);
-    g.fillStyle = '#1c1433';
-    g.fillRect(160, 96, 320, 192);
+    // The arena floor is obj_shadow_mantle_bg's grid, cell by cell from
+    // (128,64): frame = the cell's wave value, values 6/7 swap to the
+    // animated glow tiles. The border and the fourteen pillars ARE tiles
+    // (value 1 and up) — the same cells the level plants its solids on.
+    for (let c = 0; c < 12; c++) {
+      for (let r = 0; r < 8; r++) {
+        const v = tileGrid[c][r];
+        const gx = 128 + c * 32, gy = 64 + r * 32;
+        if (v === 6) drawSpr('spr_shadow_mantle_new_tiles_glow1', glowIndex, gx, gy, 1);
+        else if (v === 7) drawSpr('spr_shadow_mantle_new_tiles_glow2', glowIndex, gx, gy, 1);
+        else drawSpr('spr_shadow_mantle_new_tiles', v, gx, gy, 1);
+      }
+    }
 
-    const draw2 = (name, idx, x, y, alpha = 1, tint = null) => {
+    // Scale-aware sprite draw. The boss's own body is xscale 1 (32x32
+    // native, Kris-sized); everything orbiting him is xscale 2 (or 1.5).
+    // (x,y) is the INSTANCE position — the sprite's origin lands there,
+    // like draw_sprite_ext. `angle` rotates around the origin (GM degrees,
+    // counterclockwise). Frame indexes wrap positively — a negative index
+    // was drawing nothing (the vanishing bullets).
+    function drawSpr(name, idx, x, y, scale = 2, alpha = 1, tint = null, angle = 0) {
       const meta = S.meta(name);
       if (!meta) return;
-      let img = S.frame(name, Math.floor(idx) % meta.frames);
+      const n = meta.frames;
+      let img = S.frame(name, ((Math.floor(idx) % n) + n) % n);
       if (!img) return;
       if (tint) img = S.tinted(img, tint);
       g.save();
       g.globalAlpha = alpha;
-      g.drawImage(img, Math.round(x) - meta.ox * 2, Math.round(y) - meta.oy * 2, img.width * 2, img.height * 2);
+      if (angle) {
+        g.translate(Math.round(x), Math.round(y));
+        g.rotate(-angle * Math.PI / 180);
+        g.drawImage(img, -meta.ox * scale, -meta.oy * scale, img.width * scale, img.height * scale);
+      } else {
+        g.drawImage(img, Math.round(x) - meta.ox * scale, Math.round(y) - meta.oy * scale,
+          img.width * scale, img.height * scale);
+      }
       g.restore();
-    };
+    }
 
-    for (const gf of groundfires) draw2('spr_shadow_mantle_fire2', gf.t, gf.x - 16, gf.y - 16);
-    for (const c of clouds) draw2('spr_shadow_mantle_cloud', c.t * 0.25, c.x, c.y);
-    for (const b of bombs) draw2('spr_shadow_mantle_bomb', b.con === 2 && b.fuse > 10 ? 1 : 0, b.x - 16, b.y - 16 + (b.arc ?? 0));
-    for (const b of bullets) draw2(b.kind === 'fireball' ? 'spr_shadow_mantle_fire' : 'spr_shadow_mantle_cloud_projectile', b.t * 0.25, b.x - 12, b.y - 12);
-    for (const f of fires) draw2('spr_shadow_mantle_fire', f.len * 0.1, f.x - 14, f.y - 14, f.alpha ?? 1);
+    for (const gf of groundfires) drawSpr('spr_shadow_mantle_fire2', gf.t, gf.x, gf.y);
+    for (const c of clouds) drawSpr('spr_shadow_mantle_cloud', c.t * 0.25, c.x, c.y);
+    for (const b of bombs) drawSpr('spr_shadow_mantle_bomb', b.con === 2 && b.fuse > 10 ? 1 : 0, b.x - 16, b.y - 16 + (b.arc ?? 0));
+    for (const b of bullets) {
+      if (b.t < 0) continue;               // fireballs on their fuse don't exist yet
+      // cloud bullets fly with image_angle = direction (the cloud sets both)
+      drawSpr(b.kind === 'fireball' ? 'spr_shadow_mantle_fire' : 'spr_shadow_mantle_cloud_projectile',
+        b.t * 0.25, b.x, b.y, 2, 1, null, b.kind === 'fireball' ? 0 : b.dir);
+    }
+    for (const f of fires) drawSpr('spr_shadow_mantle_fire', f.len * 0.1, f.x, f.y, 2, f.alpha ?? 1);
+    // obj___: a 16x16 face at xscale 2. Materializing fades in; the hurt
+    // flicker swaps to spr___hurt; the unsummon plays spr___no.
     for (const s of summons) {
-      draw2('spr_shadow_mantle_idle', s.t / 3, s.x, s.y, s.t < 20 ? s.t / 20 : 1,
-        s.hurt > 0 ? '#ffffff' : '#404040');
+      if (s.dying) { drawSpr('spr___no', (s.t - s.dying) / 8, s.x, s.y); continue; }
+      if (s.hurt > 0) { drawSpr(s.hurt % 4 < 2 ? 'spr___hurt' : 'spr___', 0, s.x, s.y); continue; }
+      if (s.t < 20) { drawSpr('spr___laugh', s.t * 0.25, s.x, s.y, 2, 0.4); continue; }
+      drawSpr('spr___', s.t / 8, s.x, s.y);
     }
+    // The clones are copies of HIM — scale 1 like the boss.
     for (const c of clones) {
-      draw2('spr_board_imonfire', Math.floor(c.t / 4) % 2, c.x - 16, c.y - 32, 1, '#ff0000');
-      draw2('spr_shadow_mantle_dash', c.t / 2, c.x, c.y);
+      drawSpr('spr_board_imonfire', Math.floor(c.t / 4) % 2, c.x - 8, c.y - 16, 2, 1, '#ff0000');
+      drawSpr('spr_shadow_mantle_dash', c.t / 2, c.x, c.y, 1);
     }
-    for (const p of particles) draw2('spr_shadow_mantle_fire', p.t, p.x - 8, p.y - 8, 1 - p.t / 20);
+    for (const p of particles) drawSpr('spr_shadow_mantle_fire', p.t, p.x - 8, p.y - 8, 2, 1 - p.t / 20);
 
     if (boss.alive || outro) {
       boss.imageIndex += boss.imageSpeed;
@@ -736,15 +925,12 @@ export function createMantle(host) {
         side_r: 'spr_shadow_mantle_side_r', side_l: 'spr_shadow_mantle_side_l',
         onfire: 'spr_shadow_mantle_onfire',
       }[boss.sprite] ?? 'spr_shadow_mantle_idle';
-      if (boss.onFire) draw2('spr_board_imonfire', Math.floor(boss.siner / 4) % 2, boss.x - 16, boss.y - 32, 1, '#ff0000');
+      // his imonfire overlay stays xscale 2, offset (-16,-32) per his Draw
+      if (boss.onFire) drawSpr('spr_board_imonfire', Math.floor(boss.siner / 4) % 2, boss.x - 16, boss.y - 32, 2, 1, '#ff0000');
       const flash = boss.hurttimer > 0 && boss.hurttimer % 2 === 0;
-      draw2(name, boss.imageIndex, boss.x, boss.y, 1, flash ? '#ffffff' : boss.blend);
-      // his health, drawn the HUD's way under the strip
-      const w = Math.max(0, (boss.hp / boss.hpMax)) * 120;
-      g.fillStyle = 'rgba(255,255,255,0.25)';
-      g.fillRect(260, 70, 120, 4);
-      g.fillStyle = '#c22';
-      g.fillRect(260, 70, w, 4);
+      // the body: xscale 1, snapped to even pixels like his Draw
+      drawSpr(name, boss.imageIndex, Math.round(boss.x / 2) * 2, Math.round(boss.y / 2) * 2,
+        1, 1, flash ? '#ffffff' : boss.blend);
     }
   }
 

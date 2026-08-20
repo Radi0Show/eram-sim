@@ -53,6 +53,26 @@ export function createWriter(font, S, snd) {
       if (c === '%') { items.push({ close: true }); continue; }
       items.push({ ch: c });
     }
+    return wrap(items);
+  }
+
+  // Word-wrap to the box: 384 wide, 18px margins, hspace 16 -> 21 glyphs a
+  // line. A space that would let the next word overflow becomes a newline.
+  const LINE_MAX = 21;
+  function wrap(items) {
+    let col = 0, lastSpace = -1, colAtSpace = 0;
+    for (let i = 0; i < items.length; i++) {
+      const it = items[i];
+      if (it.ch === undefined) continue;
+      if (it.ch === '\n') { col = 0; lastSpace = -1; continue; }
+      if (it.ch === ' ') { lastSpace = i; colAtSpace = col; }
+      col += 1;
+      if (col > LINE_MAX && lastSpace >= 0) {
+        items[lastSpace] = { ch: '\n' };
+        col -= colAtSpace + 1;
+        lastSpace = -1;
+      }
+    }
     return items;
   }
 
