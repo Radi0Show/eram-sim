@@ -571,7 +571,7 @@ built from fresh room dumps:
 - **`sim/eram.js` is the embed contract** — `mountEram(canvas, { base,
   audio?, startLevel?, onLevelChange, onExit })` runs the whole campaign on
   any canvas, chains the seven levels itself, and touches no DOM. This is
-  the exact call thedevice's DEVICE_ROOM will make; index.html now runs on
+  the exact call thedevice's DEVICE_MENU will make; index.html now runs on
   it as the reference host.
 - **The tree-loop ghosts close as not-applicable**:
   obj_board_swordroute_treehelper has NO draw event — in
